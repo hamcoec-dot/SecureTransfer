@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      # The Firestore emulator needs Java 11+, which ubuntu-latest already has.
+      - run: npm ci
+      - run: npm ci
+        working-directory: functions
+      - name: Encryption tests
+        run: npm test
+      - name: Function logic tests
+        run: npm test
+        working-directory: functions
+      - name: Security rules tests (emulators)
+        run: npm run test:rules

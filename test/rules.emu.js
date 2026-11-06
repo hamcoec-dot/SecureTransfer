@@ -3,7 +3,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, getDoc, getDocs, setDoc, collection, Timestamp, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, collection, query, where, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getBytes } from 'firebase/storage';
 
 let env;
@@ -29,8 +29,9 @@ beforeEach(async () => {
       both: { perm: 'both', until: later() },
       gone: { perm: 'both', until: earlier() },
     } });
-    await setDoc(doc(db, 'folders/f1/files/a'), { uploadedBy: 'admin1' });
-    await setDoc(doc(db, 'folders/f1/files/b'), { uploadedBy: 'up' });
+    await setDoc(doc(db, 'folders/f1/files/a'), { uploadedBy: 'admin1', everyone: true, visibleTo: ['admin1'] });
+    await setDoc(doc(db, 'folders/f1/files/b'), { uploadedBy: 'up', everyone: false, visibleTo: ['up'] });
+    await setDoc(doc(db, 'folders/f1/files/c'), { uploadedBy: 'admin1', everyone: false, visibleTo: ['admin1', 'both'] });
     await setDoc(doc(db, 'audit/x'), { action: 'test' });
     await setDoc(doc(db, 'privateKeys/dl'), { wrapped: 'w' });
   });
@@ -51,12 +52,19 @@ test('members see their folder; non-members and expired members do not', async (
   await assertFails(getDoc(doc(user('gone'), 'folders/f1')));
 });
 
-test('download members see every file; upload-only members see only their own', async () => {
+test('files: shared-with-everyone, named people, and upload-only members see only their own', async () => {
   await assertSucceeds(getDoc(doc(user('dl'), 'folders/f1/files/a')));
-  await assertSucceeds(getDoc(doc(user('both'), 'folders/f1/files/b')));
+  await assertFails(getDoc(doc(user('dl'), 'folders/f1/files/b')));   // an outside uploader's file
+  await assertFails(getDoc(doc(user('dl'), 'folders/f1/files/c')));   // shared with someone else by name
+  await assertSucceeds(getDoc(doc(user('both'), 'folders/f1/files/c')));
   await assertSucceeds(getDoc(doc(user('up'), 'folders/f1/files/b')));
   await assertFails(getDoc(doc(user('up'), 'folders/f1/files/a')));
   await assertFails(getDocs(collection(user('up'), 'folders/f1/files')));
+  // The queries the portal runs:
+  await assertSucceeds(getDocs(query(collection(user('up'), 'folders/f1/files'), where('uploadedBy', '==', 'up'))));
+  await assertSucceeds(getDocs(query(collection(user('dl'), 'folders/f1/files'), where('everyone', '==', true))));
+  await assertSucceeds(getDocs(query(collection(user('both'), 'folders/f1/files'), where('visibleTo', 'array-contains', 'both'))));
+  await assertFails(getDocs(collection(user('dl'), 'folders/f1/files')));
 });
 
 test('admins read everything; nobody writes access data from the browser', async () => {

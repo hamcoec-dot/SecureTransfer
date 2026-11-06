@@ -67,12 +67,12 @@ export function access(member, nowMs, isAdmin) {
   };
 }
 
-/** May this person download this file? file = { uploadedBy, visibleTo?: [uid], downloads, maxDownloads } */
+/** May this person download this file? file = { uploadedBy, everyone, visibleTo: [uid], downloads, maxDownloads } */
 export function mayDownload(file, uid, acc) {
   if (!acc.read) return { ok: false, why: 'You no longer have access to this folder.' };
   const own = file.uploadedBy === uid;
   if (!own && !acc.readAll) return { ok: false, why: 'This file was not shared with you.' };
-  if (!own && !acc.admin && Array.isArray(file.visibleTo) && file.visibleTo.length && !file.visibleTo.includes(uid)) {
+  if (!own && !acc.admin && file.everyone !== true && !(Array.isArray(file.visibleTo) && file.visibleTo.includes(uid))) {
     return { ok: false, why: 'This file was not shared with you.' };
   }
   if (!own && !acc.admin && file.maxDownloads && (file.downloads || 0) >= file.maxDownloads) {

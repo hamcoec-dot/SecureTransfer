@@ -9,7 +9,7 @@
   // GitHub Pages paths are case-sensitive, so /SecureTransfer/Index.html would 404.
   // If the address matches one of this site's pages apart from capitalisation, go to the real page.
   (function () {
-    var pages = ["index.html"];
+    var pages = ["index.html", "preview.html"];
     var base = '/' + location.pathname.split('/')[1] + '/';
     var rest = decodeURIComponent(location.pathname.slice(base.length)).replace(/\/+$/, '').toLowerCase();
     for (var i = 0; i < pages.length; i++) {

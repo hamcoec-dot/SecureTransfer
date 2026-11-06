@@ -238,6 +238,30 @@ export const replaceKey = onCall(callOpts, async (req) => {
 });
 
 // ---------------------------------------------------------------- folders
+/** The folders this person can open, with what they may do in each (admins see all, with members). */
+export const listFolders = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const now = Date.now();
+  const out = [];
+  const people = {};
+  if (u.admin) (await db.collection('users').get()).docs.forEach((d) => { people[d.id] = d.data(); });
+  for (const d of (await db.collection('folders').get()).docs) {
+    const f = d.data();
+    const m = memberOf(f, u.uid);
+    const acc = L.access(m, now, u.admin);
+    if (!acc.read) continue;
+    const item = { id: d.id, name: f.name, kind: f.kind || 'folder', days: f.days, note: f.note || '', createdAt: f.createdAt,
+      notes: f.notes || null, perm: u.admin ? 'admin' : m.perm, until: m ? m.until : null };
+    if (u.admin) {
+      item.members = Object.entries(f.members || {}).map(([uid, x]) => ({ uid, perm: x.perm, until: ms(x.until),
+        name: people[uid]?.name || '', email: people[uid]?.email || '', org: people[uid]?.org || '' }));
+    }
+    out.push(item);
+  }
+  out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return { folders: out, admin: u.admin };
+});
+
 export const createFolder = onCall(callOpts, async (req) => {
   const me = requireAdmin(req);
   const s = await settings();
@@ -288,8 +312,13 @@ export const recipients = onCall(callOpts, async (req) => {
   const ids = new Set([u.uid]);
   (await db.collection('users').where('admin', '==', true).get()).docs.forEach((d) => ids.add(d.id));
   const now = Date.now();
-  for (const [uid, m] of Object.entries(folder.members || {})) {
-    if (ms(m.until) > now && (m.perm === 'download' || m.perm === 'both')) ids.add(uid);
+  // Files from people outside the commission go only to them and the administrators. Messages and notes, and
+  // files from administrators, go to everyone in the folder who may read them.
+  const forAll = req.data?.purpose === 'message';
+  if (u.admin || forAll) {
+    for (const [uid, m] of Object.entries(folder.members || {})) {
+      if (ms(m.until) > now && (forAll || m.perm === 'download' || m.perm === 'both')) ids.add(uid);
+    }
   }
   const out = [];
   for (const id of ids) {
@@ -324,13 +353,15 @@ export const finalizeUpload = onCall(callOpts, async (req) => {
   if ((await ref.get()).exists) throw new HttpsError('already-exists', 'Already recorded.');
   const now = Date.now();
   const opts = req.data?.options || {};
-  const visibleTo = Array.isArray(opts.visibleTo) ? opts.visibleTo.filter((x) => typeof x === 'string').slice(0, 50) : [];
+  const picked = u.admin && Array.isArray(opts.visibleTo) ? opts.visibleTo.filter((x) => typeof x === 'string').slice(0, 50) : [];
+  const everyone = u.admin && picked.length === 0;
+  const visibleTo = [...new Set([u.uid, ...picked])];
   const maxDownloads = u.admin && Number(opts.maxDownloads) > 0 ? Math.min(100, Number(opts.maxDownloads)) : 0;
   await ref.set({
     path, name, sha256, ext: String(ext).toLowerCase(), size: Number(meta.size), plainSize: Number(size) || 0,
     keys, uploadedBy: u.uid, uploaderEmail: u.email, uploadedAt: now,
     expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)),
-    visibleTo, maxDownloads, deleteAfterDownload: u.admin && opts.deleteAfterDownload === true, downloads: 0,
+    everyone, visibleTo, maxDownloads, deleteAfterDownload: u.admin && opts.deleteAfterDownload === true, downloads: 0,
   });
   await audit('file.upload', { folder: fid, file: fileId, note: `sha256 ${sha256.slice(0, 16)}…, ${meta.size} bytes` }, req);
   if (!u.admin) {
@@ -339,7 +370,7 @@ export const finalizeUpload = onCall(callOpts, async (req) => {
   } else {
     const now2 = Date.now();
     const readers = Object.entries(folder.members || {}).filter(([uid, m]) => ms(m.until) > now2 && m.perm !== 'upload'
-      && (!visibleTo.length || visibleTo.includes(uid))).map(([uid]) => uid);
+      && (everyone || visibleTo.includes(uid))).map(([uid]) => uid);
     const emails = (await Promise.all(readers.map(userEmail))).filter(Boolean);
     await notify(emails, 'Secure Transfer: a file is ready for you',
       `The Hamilton County Election Commission shared a file with you in "${folder.name}". Sign in to download it before ${new Date(L.expiresAt(now, folder.days)).toDateString()}.`);
@@ -374,7 +405,10 @@ export const getDownload = onCall(callOpts, async (req) => {
       `${u.email} downloaded a file you shared in "${folder.name}" on ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.` +
       (file.deleteAfterDownload ? ' It was set to delete after download and will be removed within 10 minutes.' : ''));
   }
-  return { url, keys: file.keys[u.uid] ? { [u.uid]: file.keys[u.uid] } : {}, name: file.name, sha256: file.sha256 };
+  const keys = {};
+  if (file.keys[u.uid]) keys[u.uid] = file.keys[u.uid];
+  if (u.admin && req.data?.useRecovery === true) keys.recovery = file.keys.recovery;
+  return { url, keys, name: file.name, sha256: file.sha256 };
 });
 
 export const deleteFile = onCall(callOpts, async (req) => {
@@ -504,7 +538,7 @@ export const dropoffFinish = onCall(callOpts, async (req) => {
   await db.doc(`folders/${d.folder}/files/${fileId}`).set({
     path, name, sha256: String(sha256), ext: String(ext).toLowerCase(), size: Number(meta.size), plainSize: Number(size) || 0,
     keys, uploadedBy: 'dropoff', uploaderEmail: L.cleanText(sender, 120), uploadedAt: now,
-    expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)), visibleTo: [], maxDownloads: 0, downloads: 0,
+    expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)), everyone: false, visibleTo: [], maxDownloads: 0, downloads: 0,
   });
   await audit('dropoff.upload', { folder: d.folder, file: fileId, actor: 'dropoff', actorEmail: L.cleanText(sender, 120) }, req);
   await notify(await adminEmails(), `Secure Transfer: new file at drop-off "${d.label}"`,

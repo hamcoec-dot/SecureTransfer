@@ -40,13 +40,15 @@ test('download rules: own files, per-file visibility, limits', () => {
   const dl = L.access({ perm: 'download', until: 2 }, 1, false);
   const up = L.access({ perm: 'upload', until: 2 }, 1, false);
   const admin = L.access(undefined, 1, true);
-  const f = { uploadedBy: 'admin', visibleTo: ['bob'], maxDownloads: 1, downloads: 0 };
+  const f = { uploadedBy: 'admin', everyone: false, visibleTo: ['bob'], maxDownloads: 1, downloads: 0 };
   assert.equal(L.mayDownload(f, 'bob', dl).ok, true);
   assert.equal(L.mayDownload(f, 'carol', dl).ok, false);
   assert.equal(L.mayDownload(f, 'bob', up).ok, false);
   assert.equal(L.mayDownload({ ...f, downloads: 1 }, 'bob', dl).ok, false);
   assert.equal(L.mayDownload({ ...f, downloads: 1 }, 'admin', admin).ok, true);
-  assert.equal(L.mayDownload({ uploadedBy: 'up1' }, 'up1', up).ok, true);
+  assert.equal(L.mayDownload({ uploadedBy: 'up1', everyone: false, visibleTo: ['up1'] }, 'up1', up).ok, true);
+  assert.equal(L.mayDownload({ uploadedBy: 'up1', everyone: false, visibleTo: ['up1'] }, 'bob', dl).ok, false);
+  assert.equal(L.mayDownload({ uploadedBy: 'admin', everyone: true, visibleTo: ['admin'] }, 'carol', dl).ok, true);
 });
 
 test('drop-off codes are readable, hashed and compared safely', () => {

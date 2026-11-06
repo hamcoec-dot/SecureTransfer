@@ -108,11 +108,11 @@ export async function wrapFileKey(fileKey, recipientId, recipientPublicJwk) {
 }
 
 /** Unwrap a file key with the recipient's private key. */
-export async function unwrapFileKey(entry, recipientId, privateKey) {
+export async function unwrapFileKey(entry, recipientId, privateKey, extractable = false) {
   const kek = await kekFor(privateKey, await importPublic(entry.epk), fromB64(entry.salt), recipientId);
   try {
     return await subtle.unwrapKey('raw', fromB64(entry.wrapped), kek, 'AES-KW',
-      { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      { name: 'AES-GCM', length: 256 }, extractable, ['encrypt', 'decrypt']);
   } catch (e) {
     throw new Error('This key cannot open the file.');
   }

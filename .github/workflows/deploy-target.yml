@@ -1,0 +1,53 @@
+name: deploy-target
+
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      project: { type: string, required: true }
+      service_account_var: { type: string, required: true }
+      wif_var: { type: string, required: true }
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - name: Install function dependencies
+        working-directory: functions
+        run: npm ci --omit=dev
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars[inputs.wif_var] }}
+          service_account: ${{ vars[inputs.service_account_var] }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Bucket settings (CORS for the portal, deletion backstop)
+        run: |
+          B="gs://${{ inputs.project }}.firebasestorage.app"
+          gcloud storage buckets update "$B" --cors-file=cors.json --project="${{ inputs.project }}"
+          gcloud storage buckets update "$B" --lifecycle-file=lifecycle.json --project="${{ inputs.project }}"
+      - name: Deploy functions, rules and indexes
+        run: npx --yes firebase-tools@14.27.0 deploy --only functions,firestore,storage --project "${{ inputs.project }}" --non-interactive --force
+      - name: Public invoker on the callables and sign-in hooks (each checks sign-in itself)
+        run: |
+          for fn in $(grep -oP '^export const \K\w+(?= = (onCall|beforeUserCreated|beforeUserSignedIn)\()' functions/src/index.js); do
+            service=$(echo "$fn" | tr '[:upper:]' '[:lower:]')
+            gcloud run services add-iam-policy-binding "$service" --region=us-east1 \
+              --member=allUsers --role=roles/run.invoker --project="${{ inputs.project }}" --quiet >/dev/null
+            echo "invoker: $service"
+          done

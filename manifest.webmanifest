@@ -1,0 +1,10 @@
+{
+  "name": "HCEC Secure Transfer",
+  "short_name": "Secure Transfer",
+  "start_url": "/SecureTransfer/",
+  "scope": "/SecureTransfer/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#13286b",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -11,9 +11,12 @@ Design and build plan: [plans/secure-transfer.md](plans/secure-transfer.md).
 
 | Part | State |
 |---|---|
-| Design preview (`index.html`, example data, nothing uploaded) | done |
-| Firebase projects, sign-in with authenticator codes, rules | not started (Phase 2) |
-| Browser encryption, upload and download | not started (Phase 3) |
-| Invitations, file requests, permissions | not started (Phase 4) |
-| Automatic deletion, activity log | not started (Phase 5) |
-| Staging and production deploy, security review | not started (Phase 6) |
+| Design preview (`preview.html`, example data) | done |
+| Firebase projects (test and live), sign-in with authenticator codes, rules | done, rules tested on emulators |
+| Browser encryption (`js/crypto.js`), recovery key, fingerprints | done, tested |
+| Cloud Functions (`functions/`): invitations, permissions, uploads/downloads, limits, drop-off, messages, notes, cleanup, chained activity log, email alerts | written, logic tested; first deploy pending |
+| Portal (`index.html`, `js/app.js`) | written; end-to-end test on the test project pending |
+| Passkeys, signature requests | not started |
+
+Tests: `npm test` (encryption), `npm test` in `functions/` (logic), `npm run test:rules` (rules on emulators).
+Deploying: [docs/DEPLOY.md](docs/DEPLOY.md).

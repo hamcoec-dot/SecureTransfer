@@ -5,247 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://www.google.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.googleapis.com https://*.cloudfunctions.net https://*.run.app https://storage.googleapis.com https://*.firebasestorage.app https://www.google.com http://127.0.0.1:* http://localhost:* ws://127.0.0.1:*; frame-src https://www.google.com https://www.recaptcha.net https://*.firebaseapp.com; form-action 'none'; base-uri 'none'; object-src 'none'">
 <title>HCEC Secure Transfer</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#13286b">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<style>
-/* Layout: app shell. Fixed left rail of folders (collapses to a top bar on phones), main pane with the open
-   folder's files and its people side by side. Commission colours from the Results site. */
-:root {
-  --navy: #1e3a8a;
-  --navy-ink: #13286b;
-  --crimson: #991b1c;
-  --gold: #b45309;
-  --bg: #f4f6fb;
-  --surface: #ffffff;
-  --surface-2: #eef2fa;
-  --fg: #0f172a;
-  --muted: #4a5670;
-  --border: #d9e0ee;
-  --rail: #13286b;
-  --rail-fg: #e8edfb;
-  --rail-muted: #a9b6dc;
-  --rail-active: #24409a;
-  --ok: #15803d;
-  --ok-bg: #e7f6ec;
-  --warn: #a15c07;
-  --warn-bg: #fdf3e2;
-  --bad: #b91c1c;
-  --bad-bg: #fdecec;
-  --focus: #1d4ed8;
-  --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 6px 18px rgba(15, 23, 42, .06);
-  --font-ui: "Public Sans", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
-  --r-sm: 6px;
-  --r-md: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --navy: #8fb0ff; --navy-ink: #c9d7ff; --crimson: #f08a8a; --gold: #f0b25c;
-    --bg: #0c1222; --surface: #141c31; --surface-2: #1b2540; --fg: #e6ebf7; --muted: #a3afc9; --border: #2a3657;
-    --rail: #0a0f1d; --rail-fg: #e6ebf7; --rail-muted: #8e9bbd; --rail-active: #1e2b52;
-    --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
-    --focus: #8fb0ff; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --navy: #8fb0ff; --navy-ink: #c9d7ff; --crimson: #f08a8a; --gold: #f0b25c;
-  --bg: #0c1222; --surface: #141c31; --surface-2: #1b2540; --fg: #e6ebf7; --muted: #a3afc9; --border: #2a3657;
-  --rail: #0a0f1d; --rail-fg: #e6ebf7; --rail-muted: #8e9bbd; --rail-active: #1e2b52;
-  --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
-  --focus: #8fb0ff; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
-}
-
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-ui); }
-h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.25; }
-button, input, select { font: inherit; color: inherit; }
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-
-/* ---------- Shell ---------- */
-.shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100%; }
-.rail { background: var(--rail); color: var(--rail-fg); display: flex; flex-direction: column; gap: 20px;
-  padding-block: 18px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; }
-.brand { display: flex; gap: 10px; align-items: center; color: inherit; text-decoration: none; }
-.seal { width: 38px; height: 38px; flex: none; }
-.brand-name { font-weight: 800; font-size: 15px; letter-spacing: .01em; }
-.brand-sub { font-size: 12px; color: var(--rail-muted); }
-.rail-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 42px;
-  border: 0; border-radius: var(--r-sm); background: #f5f7ff; color: #13286b; font-weight: 700; cursor: pointer; }
-.rail-btn:hover { background: #ffffff; }
-.rail-section { display: grid; gap: 2px; }
-.rail-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--rail-muted);
-  padding: 0 10px 6px; }
-.rail-link { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center;
-  padding: 8px 10px; border-radius: var(--r-sm); color: inherit; text-decoration: none; border: 0; background: none;
-  width: 100%; text-align: left; cursor: pointer; }
-.rail-link:hover { background: var(--rail-active); }
-.rail-link[aria-current="page"] { background: var(--rail-active); box-shadow: inset 3px 0 0 #f0b25c; }
-.rail-link .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-link .n { font-size: 12px; color: var(--rail-muted); }
-.rail-foot { margin-top: auto; font-size: 12px; color: var(--rail-muted); display: grid; gap: 8px; }
-.me { display: flex; gap: 10px; align-items: center; }
-.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none;
-  font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--navy); }
-.rail .avatar { background: #f0b25c; color: #13286b; }
-.linkish { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font-size: 12px; }
-
-.main { min-width: 0; display: flex; flex-direction: column; }
-.demo-bar { background: var(--warn-bg); color: var(--warn); font-size: 13px; font-weight: 600;
-  padding-block: 8px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-.view { padding-block: 24px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px));
-  padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1180px; width: 100%; display: grid; gap: 20px; align-content: start; }
-@media (min-width: 900px) { .view { padding-left: 32px; padding-right: max(32px, env(safe-area-inset-right, 0px)); } }
-
-.head { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end; justify-content: space-between; }
-.eyebrow { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-.head h1 { font-size: 26px; font-weight: 800; color: var(--fg); }
-.head p { margin: 4px 0 0; color: var(--muted); max-width: 62ch; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-
-.btn { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border-radius: var(--r-sm);
-  border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-weight: 600; cursor: pointer; }
-.btn:hover { background: var(--surface-2); }
-.btn.primary { background: var(--navy); border-color: var(--navy); color: var(--surface); }
-.btn.primary:hover { filter: brightness(1.1); background: var(--navy); }
-.btn.danger { color: var(--bad); }
-.btn.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
-.icon { width: 16px; height: 16px; flex: none; }
-
-.grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
-@media (max-width: 1050px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
-
-.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow); min-width: 0; }
-.panel-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-.panel-h h2 { font-size: 15px; font-weight: 700; }
-.panel-b { padding: 16px; }
-
-/* Facts strip under the folder title */
-.facts { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px;
-  font-weight: 600; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); white-space: nowrap; }
-.chip.ok { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
-.chip.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
-.chip.bad { background: var(--bad-bg); color: var(--bad); border-color: transparent; }
-
-/* Drop zone */
-.drop { border: 2px dashed var(--border); border-radius: var(--r-md); padding: 22px 16px; display: grid; gap: 6px;
-  justify-items: center; text-align: center; color: var(--muted); background: var(--surface-2); cursor: pointer; }
-.drop strong { color: var(--fg); }
-.drop.over { border-color: var(--navy); background: var(--surface); }
-.drop small { font-size: 12.5px; }
-
-/* Files table */
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700;
-  padding: 10px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-tr:last-child td { border-bottom: 0; }
-.file { display: flex; gap: 10px; align-items: center; min-width: 220px; }
-.ext { width: 34px; height: 40px; border-radius: 4px; display: grid; place-items: end center; padding-bottom: 5px; flex: none;
-  font: 700 9.5px/1 var(--font-mono); letter-spacing: .03em; color: var(--surface); background: var(--navy); }
-.ext.csv { background: var(--ok); }
-.ext.pdf { background: var(--crimson); }
-.ext.xlsx { background: #0f766e; }
-.fname { font-weight: 600; word-break: break-word; }
-.fmeta { font-size: 12.5px; color: var(--muted); }
-.num { text-align: right; white-space: nowrap; }
-.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
-
-/* People list */
-.people { display: grid; }
-.person { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
-.person:last-child { border-bottom: 0; }
-.person .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person .em { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.perm { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--navy); white-space: nowrap; }
-.perm.up { color: var(--gold); }
-
-.secure-note { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; font-size: 13px; color: var(--muted); }
-.secure-note b { color: var(--fg); }
-
-/* Folder cards on the overview */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-.fcard { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 16px;
-  display: grid; gap: 10px; cursor: pointer; box-shadow: var(--shadow); color: inherit; }
-.fcard:hover { border-color: var(--navy); }
-.fcard h3 { font-size: 16px; }
-.fcard .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
-
-/* Activity */
-.log { display: grid; }
-.log-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 16px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
-.log-row:last-child { border-bottom: 0; }
-.log-row time { color: var(--muted); font-size: 12.5px; }
-.log-row .what { min-width: 0; }
-.log-row .ip { font-size: 12px; color: var(--muted); }
-@media (max-width: 600px) { .log-row { grid-template-columns: minmax(0, 1fr); } }
-
-/* Forms */
-.field { display: grid; gap: 5px; }
-.field label { font-weight: 700; font-size: 14px; }
-.field .hint { font-size: 12.5px; color: var(--muted); }
-.field input, .field select { min-height: 42px; padding: 8px 10px; border: 1.5px solid var(--border); border-radius: var(--r-sm); background: var(--surface); width: 100%; }
-.form { display: grid; gap: 14px; }
-.radios { display: grid; gap: 6px; }
-.radio { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: var(--r-sm); cursor: pointer; }
-.radio:has(input:checked) { border-color: var(--navy); background: var(--surface-2); }
-.radio input { margin: 3px 0 0; }
-.radio span { display: grid; }
-.radio small { color: var(--muted); }
-
-/* Dialog */
-dialog { border: 0; border-radius: var(--r-md); padding: 0; width: min(520px, calc(100% - 32px)); background: var(--surface); color: var(--fg); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-dialog::backdrop { background: rgba(10, 16, 34, .55); }
-.dlg-h { padding: 18px 20px 0; display: grid; gap: 4px; }
-.dlg-h h2 { font-size: 19px; }
-.dlg-h p { margin: 0; color: var(--muted); font-size: 14px; }
-.dlg-b { padding: 16px 20px; }
-.dlg-f { padding: 0 20px 18px; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.linkbox { display: flex; gap: 8px; }
-.linkbox input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 13px; }
-
-/* Sign-in */
-.signin { min-height: 100%; display: grid; place-items: center; padding-block: 32px;
-  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  background: linear-gradient(160deg, var(--rail) 0 38%, var(--bg) 38% 100%); }
-.signin-card { width: min(420px, 100%); background: var(--surface); border-radius: var(--r-md); box-shadow: 0 20px 50px rgba(10,16,34,.25); padding: 28px; display: grid; gap: 18px; }
-.signin-card .brand { color: var(--fg); }
-.signin-card .brand-sub { color: var(--muted); }
-.steps { display: flex; gap: 6px; }
-.steps span { height: 4px; flex: 1; border-radius: 2px; background: var(--border); }
-.steps span.on { background: var(--navy); }
-.code-input { letter-spacing: .5em; font-family: var(--font-mono); font-size: 22px !important; text-align: center; }
-.fine { font-size: 12.5px; color: var(--muted); margin: 0; }
-
-.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg);
-  padding: 10px 16px; border-radius: var(--r-sm); font-weight: 600; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100% - 32px); z-index: 50; }
-
-/* Phones: rail becomes a top bar with a horizontal folder list */
-@media (max-width: 760px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
-  .rail { padding-right: max(16px, env(safe-area-inset-right, 0px)); gap: 12px; }
-  .rail-section.folders { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
-  .rail-section.folders .rail-label { display: none; }
-  .rail-section.folders .rail-link { width: auto; flex: none; grid-template-columns: auto; padding: 6px 12px; background: var(--rail-active); }
-  .rail-section.folders .rail-link svg, .rail-section.folders .rail-link .n { display: none; }
-  .rail-section.nav { display: flex; gap: 6px; flex-wrap: wrap; }
-  .rail-section.nav .rail-label { display: none; }
-  .rail-section.nav .rail-link { width: auto; grid-template-columns: 18px auto; }
-  .rail-section.nav .rail-link .n { display: none; }
-  .rail-foot { display: none; }
-}
-</style>
-
+<link rel="stylesheet" href="css/app.css">
+<script src="js/vendor/qrcode.js" defer></script>
+<script type="module" src="js/app.js"></script>
 </head>
 <body>
+<a class="sr" href="#view">Skip to main content</a>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
   <symbol id="i-inbox" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6H3v-6z"/></symbol>
@@ -268,409 +41,87 @@ dialog::backdrop { background: rgba(10, 16, 34, .55); }
   </symbol>
 </svg>
 
-<!-- ============ Sign-in (shown after "Sign out") ============ -->
+<!-- ============ Sign-in ============ -->
 <section id="signin" class="signin" hidden aria-label="Sign in">
   <div class="signin-card">
     <div class="brand"><svg class="seal" aria-hidden="true"><use href="#seal"/></svg>
       <div><div class="brand-name">Secure Transfer</div><div class="brand-sub">Hamilton County Election Commission</div></div></div>
     <div class="steps" aria-hidden="true"><span class="on"></span><span id="step2bar"></span></div>
-    <form id="signin-1" class="form" novalidate>
+
+    <form id="f-pass" class="form" novalidate>
       <div><h1 style="font-size:20px">Sign in</h1><p class="fine">Use the email address your invitation was sent to.</p></div>
-      <div class="field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="username" value="nate@example.gov"></div>
-      <div class="field"><label for="si-pass">Password</label><input id="si-pass" type="password" autocomplete="current-password" value="example-password"></div>
+      <div class="field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="username" required></div>
+      <div class="field"><label for="si-pass">Password</label><input id="si-pass" type="password" autocomplete="current-password" required></div>
+      <p class="field-error" id="err-pass" role="alert"></p>
       <button class="btn primary" type="submit" style="justify-content:center">Continue</button>
-      <p class="fine">No account? Accounts are by invitation only. Ask the Election Commission to invite you.</p>
+      <p class="fine"><button class="linkish" type="button" id="forgot" style="color:var(--navy)">Forgot your password?</button> Accounts are by invitation only.</p>
     </form>
-    <form id="signin-2" class="form" novalidate hidden>
-      <div><h1 style="font-size:20px">Enter your 6-digit code</h1><p class="fine">Open your authenticator app (Google Authenticator, Microsoft Authenticator, or similar) and type the code shown for Secure Transfer.</p></div>
-      <div class="field"><label for="si-code" class="sr">Code</label><input id="si-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="482913"></div>
+
+    <form id="f-code" class="form" novalidate hidden>
+      <div><h1 style="font-size:20px">Enter your 6-digit code</h1><p class="fine">Open your authenticator app and type the code shown for Secure Transfer.</p></div>
+      <div class="field"><label for="si-code" class="sr">Code</label><input id="si-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></div>
+      <p class="field-error" id="err-code" role="alert"></p>
       <button class="btn primary" type="submit" style="justify-content:center">Sign in</button>
-      <p class="fine">Signed out automatically after 30 minutes without activity.</p>
+    </form>
+
+    <form id="f-enroll" class="form" novalidate hidden>
+      <div><h1 style="font-size:20px">Set up your authenticator app</h1>
+        <p class="fine">Every sign-in needs a code from an app on your phone, such as Google Authenticator or Microsoft Authenticator. In the app, add an account and scan this code.</p></div>
+      <div id="qr" style="display:grid;place-items:center;background:#fff;padding:12px;border-radius:8px"></div>
+      <p class="fine">Can't scan? Enter this key in the app: <span class="mono" id="totp-secret" style="word-break:break-all;user-select:all"></span></p>
+      <div class="field"><label for="en-code">Code from the app</label><input id="en-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></div>
+      <p class="field-error" id="err-enroll" role="alert"></p>
+      <button class="btn primary" type="submit" style="justify-content:center">Turn on</button>
+    </form>
+
+    <div id="f-busy" class="form" hidden><p class="fine" id="busy-text" role="status">Unlocking your files…</p></div>
+    <p class="fine">Signed out automatically after 30 minutes without activity.</p>
+  </div>
+</section>
+
+<!-- ============ Public drop-off page ============ -->
+<section id="dropoff" class="signin" hidden aria-label="Send files">
+  <div class="signin-card">
+    <div class="brand"><svg class="seal" aria-hidden="true"><use href="#seal"/></svg>
+      <div><div class="brand-name">Send files securely</div><div class="brand-sub">Hamilton County Election Commission</div></div></div>
+    <form id="f-drop" class="form" novalidate>
+      <p class="fine">Files are encrypted on this device before they are sent. Only the Election Commission can open them.</p>
+      <div class="field"><label for="dr-code">Drop-off code</label><input id="dr-code" class="mono" autocomplete="off" required placeholder="ABCDE-12345"></div>
+      <div class="field"><label for="dr-from">Your name and email</label><input id="dr-from" required placeholder="Name, name@example.com"></div>
+      <div class="field"><label for="dr-files">Files</label><input id="dr-files" type="file" multiple required></div>
+      <p class="field-error" id="err-drop" role="alert"></p>
+      <button class="btn primary" type="submit" style="justify-content:center">Encrypt and send</button>
+      <p class="fine" id="drop-status" role="status"></p>
     </form>
   </div>
 </section>
 
 <!-- ============ App ============ -->
-<div id="app" class="shell">
+<div id="app" class="shell" hidden>
   <nav class="rail" aria-label="Secure Transfer">
     <a class="brand" href="#overview"><svg class="seal" aria-hidden="true"><use href="#seal"/></svg>
       <div><div class="brand-name">Secure Transfer</div><div class="brand-sub">Hamilton County Election Commission</div></div></a>
-    <button class="rail-btn" type="button" id="new-folder-btn"><svg class="icon"><use href="#i-plus"/></svg>New shared folder</button>
-    <div class="rail-section folders" id="rail-folders"><div class="rail-label">Shared folders</div></div>
-    <div class="rail-section nav">
+    <button class="rail-btn admin-only" type="button" data-act="newfolder"><svg class="icon"><use href="#i-plus"/></svg>New shared folder</button>
+    <div class="rail-section folders" id="rail-folders"></div>
+    <div class="rail-section nav admin-only">
       <div class="rail-label">Manage</div>
-      <a class="rail-link" href="#requests"><svg class="icon"><use href="#i-inbox"/></svg><span class="t">File requests</span><span class="n" id="n-req"></span></a>
-      <a class="rail-link" href="#people"><svg class="icon"><use href="#i-people"/></svg><span class="t">People</span><span class="n" id="n-ppl"></span></a>
+      <a class="rail-link" href="#requests"><svg class="icon"><use href="#i-inbox"/></svg><span class="t">File requests</span><span class="n"></span></a>
+      <a class="rail-link" href="#people"><svg class="icon"><use href="#i-people"/></svg><span class="t">People</span><span class="n"></span></a>
       <a class="rail-link" href="#activity"><svg class="icon"><use href="#i-log"/></svg><span class="t">Activity log</span><span class="n"></span></a>
-      <a class="rail-link" href="#rules"><svg class="icon"><use href="#i-gear"/></svg><span class="t">Deletion rules</span><span class="n"></span></a>
+      <a class="rail-link" href="#rules"><svg class="icon"><use href="#i-gear"/></svg><span class="t">Settings</span><span class="n"></span></a>
     </div>
     <div class="rail-foot">
-      <div class="me"><span class="avatar">NF</span><div><div style="color:var(--rail-fg);font-weight:600">Nate</div><div>Administrator</div></div></div>
+      <div class="me"><span class="avatar" id="me-initials"></span><div><div style="color:var(--rail-fg);font-weight:600" id="me-name"></div><div id="me-role"></div></div></div>
       <button class="linkish" id="signout" type="button">Sign out</button>
     </div>
   </nav>
   <div class="main">
-    <div class="demo-bar">Design preview with example folders and people. Nothing you add here is uploaded or sent.</div>
+    <div class="demo-bar" id="env-bar" hidden></div>
     <main id="view" class="view" tabindex="-1"></main>
   </div>
 </div>
 
-<!-- Invite dialog -->
-<dialog id="dlg-invite" aria-labelledby="inv-title">
-  <form method="dialog" id="inv-form">
-    <div class="dlg-h"><h2 id="inv-title">Add someone to this folder</h2><p id="inv-sub">They'll get an email invitation and set up a password and an authenticator app the first time.</p></div>
-    <div class="dlg-b form">
-      <div class="field"><label for="inv-name">Name</label><input id="inv-name" required placeholder="Full name"></div>
-      <div class="field"><label for="inv-email">Email</label><input id="inv-email" type="email" required placeholder="name@agency.gov"></div>
-      <fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font-weight:700;font-size:14px;margin-bottom:5px">What can they do?</legend>
-        <div class="radios">
-          <label class="radio"><input type="radio" name="perm" value="download" checked><span><b>Download only</b><small>See and download the files you put here.</small></span></label>
-          <label class="radio"><input type="radio" name="perm" value="upload"><span><b>Upload only</b><small>Send files to you. They can't see anyone else's files.</small></span></label>
-          <label class="radio"><input type="radio" name="perm" value="both"><span><b>Upload and download</b><small>Work back and forth with you in this folder.</small></span></label>
-        </div>
-      </fieldset>
-      <div class="field"><label for="inv-until">Access ends</label>
-        <select id="inv-until"><option value="7">In 7 days</option><option value="30" selected>In 30 days</option><option value="90">In 90 days</option><option value="0">When the folder is deleted</option></select></div>
-    </div>
-    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok" id="inv-ok">Send invitation</button></div>
-  </form>
-</dialog>
-
-<!-- New folder dialog -->
-<dialog id="dlg-folder" aria-labelledby="nf-title">
-  <form method="dialog" id="nf-form">
-    <div class="dlg-h"><h2 id="nf-title">New shared folder</h2><p>Files in this folder are deleted automatically when they reach the age you pick.</p></div>
-    <div class="dlg-b form">
-      <div class="field"><label for="nf-name">Folder name</label><input id="nf-name" required placeholder="For example: Precinct boundary review"></div>
-      <div class="field"><label for="nf-ttl">Delete each file after</label>
-        <select id="nf-ttl"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select>
-        <span class="hint">Counted from when each file is uploaded. The longest allowed is set under Deletion rules.</span></div>
-    </div>
-    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Create folder</button></div>
-  </form>
-</dialog>
-
-<!-- File request dialog -->
-<dialog id="dlg-request" aria-labelledby="rq-title">
-  <form method="dialog" id="rq-form">
-    <div class="dlg-h"><h2 id="rq-title">Request files</h2><p>The person signs in and uploads straight into a folder only you can see.</p></div>
-    <div class="dlg-b form" id="rq-body">
-      <div class="field"><label for="rq-email">Who should send files?</label><input id="rq-email" type="email" required placeholder="name@agency.gov"></div>
-      <div class="field"><label for="rq-what">What do you need?</label><input id="rq-what" required placeholder="For example: Signed petition scans for District 4"></div>
-      <div class="field"><label for="rq-ttl">Delete received files after</label>
-        <select id="rq-ttl"><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></div>
-    </div>
-    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Send request</button></div>
-  </form>
-</dialog>
-
-<!-- Confirm delete -->
-<dialog id="dlg-confirm" aria-labelledby="cf-title">
-  <form method="dialog">
-    <div class="dlg-h"><h2 id="cf-title">Delete this file now?</h2><p id="cf-sub"></p></div>
-    <div class="dlg-f" style="padding-top:16px"><button class="btn" value="cancel">Keep it</button><button class="btn primary" value="ok" style="background:var(--bad);border-color:var(--bad)">Delete now</button></div>
-  </form>
-</dialog>
-
+<dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dlg-form" novalidate></form></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-
-<script>
-(function () {
-  'use strict';
-  var DAY = 864e5;
-  var now = Date.now();
-  function ago(h) { return now - h * 36e5; }
-
-  // ---------- Example data (clearly fictional) ----------
-  var state = {
-    maxDays: 90,
-    defaultDays: 7,
-    people: [
-      { id: 'p1', name: 'Jordan Ellis', email: 'jordan.ellis@example.gov', org: 'State election office (example)' },
-      { id: 'p2', name: 'Priya Natarajan', email: 'pnatarajan@example.com', org: 'Ballot printing vendor (example)' },
-      { id: 'p3', name: 'Marcus Webb', email: 'mwebb@example.org', org: 'County GIS (example)' },
-      { id: 'p4', name: 'Dana Hollis', email: 'dhollis@example.gov', org: 'Auditor (example)' }
-    ],
-    folders: [
-      { id: 'f1', name: 'Nov 2026 canvass worksheets', days: 30, created: ago(80),
-        members: [{ pid: 'p1', perm: 'both', until: now + 26 * DAY }, { pid: 'p4', perm: 'download', until: now + 12 * DAY }],
-        files: [
-          { name: 'Canvass_Summary_Draft.csv', size: 48213, by: 'You', at: ago(20) },
-          { name: 'Provisional_Ballot_Log.xlsx', size: 312877, by: 'Jordan Ellis', at: ago(46) },
-          { name: 'Precinct_Totals_Early.csv', size: 1902334, by: 'You', at: ago(70) },
-          { name: 'Canvass_Board_Notes.txt', size: 6120, by: 'Jordan Ellis', at: ago(28 * 24) }
-        ] },
-      { id: 'f2', name: 'Ballot proofs for review', days: 7, created: ago(120),
-        members: [{ pid: 'p2', perm: 'upload', until: now + 5 * DAY }],
-        files: [
-          { name: 'Proof_Style_014.pdf', size: 2240150, by: 'Priya Natarajan', at: ago(30) },
-          { name: 'Proof_Style_015.pdf', size: 2198001, by: 'Priya Natarajan', at: ago(30) },
-          { name: 'Proof_Changes_List.txt', size: 3211, by: 'Priya Natarajan', at: ago(150) }
-        ] },
-      { id: 'f3', name: 'Precinct boundary files', days: 14, created: ago(300),
-        members: [{ pid: 'p3', perm: 'both', until: now + 9 * DAY }],
-        files: [
-          { name: 'Precinct_Shapes_2026.geojson', size: 14802211, by: 'Marcus Webb', at: ago(96) },
-          { name: 'Address_Exceptions.csv', size: 88213, by: 'You', at: ago(200) }
-        ] }
-    ],
-    requests: [
-      { to: 'pnatarajan@example.com', what: 'Final proofs, all ballot styles', at: ago(30), status: 'Received 2 files' },
-      { to: 'dhollis@example.gov', what: 'Signed audit attestation', at: ago(4), status: 'Waiting' }
-    ],
-    log: [
-      { at: ago(2), who: 'Dana Hollis', what: 'downloaded Canvass_Summary_Draft.csv', where: 'Nov 2026 canvass worksheets', ip: '203.0.113.24' },
-      { at: ago(6), who: 'System', what: 'deleted 3 files that reached their deletion date', where: 'Ballot proofs for review', ip: '' },
-      { at: ago(20), who: 'You', what: 'uploaded Canvass_Summary_Draft.csv', where: 'Nov 2026 canvass worksheets', ip: '198.51.100.7' },
-      { at: ago(30), who: 'Priya Natarajan', what: 'uploaded Proof_Style_014.pdf and 1 more', where: 'Ballot proofs for review', ip: '192.0.2.88' },
-      { at: ago(46), who: 'Jordan Ellis', what: 'uploaded Provisional_Ballot_Log.xlsx', where: 'Nov 2026 canvass worksheets', ip: '203.0.113.61' },
-      { at: ago(50), who: 'You', what: 'gave Dana Hollis download access until ' + fmtDate(now + 12 * DAY), where: 'Nov 2026 canvass worksheets', ip: '198.51.100.7' },
-      { at: ago(51), who: 'Jordan Ellis', what: 'signed in (password and authenticator code)', where: '', ip: '203.0.113.61' },
-      { at: ago(73), who: 'Unknown', what: 'failed sign-in for jordan.ellis@example.gov (wrong code)', where: '', ip: '198.18.4.2', bad: true }
-    ]
-  };
-
-  // ---------- Helpers ----------
-  function $(s, r) { return (r || document).querySelector(s); }
-  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  function person(id) { return state.people.filter(function (p) { return p.id === id; })[0]; }
-  function folder(id) { return state.folders.filter(function (f) { return f.id === id; })[0]; }
-  function fmtSize(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'; return (b / 1048576).toFixed(1) + ' MB'; }
-  function fmtDate(t) { return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-  function fmtWhen(t) {
-    var h = (now - t) / 36e5;
-    if (h < 1) return 'Just now'; if (h < 24) return Math.round(h) + ' h ago';
-    return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  }
-  function expires(f, file) { return file.at + f.days * DAY; }
-  function left(t) {
-    var d = (t - now) / DAY;
-    if (d < 1) { var h = Math.max(1, Math.round(d * 24)); return { txt: h + ' h left', cls: 'bad' }; }
-    if (d < 3) return { txt: Math.ceil(d) + ' days left', cls: 'warn' };
-    return { txt: Math.ceil(d) + ' days left', cls: '' };
-  }
-  function initials(n) { return n.split(/\s+/).map(function (w) { return w[0]; }).slice(0, 2).join('').toUpperCase(); }
-  function ext(name) { var m = /\.([a-z0-9]+)$/i.exec(name); return m ? m[1].toLowerCase() : 'file'; }
-  var permText = { download: 'Download only', upload: 'Upload only', both: 'Upload & download' };
-  var toastT;
-  function toast(msg) { var t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(function () { t.hidden = true; }, 3200); }
-  function logIt(what, where) { state.log.unshift({ at: Date.now(), who: 'You', what: what, where: where || '', ip: '198.51.100.7' }); }
-
-  // ---------- Rail ----------
-  function renderRail(route, arg) {
-    var box = $('#rail-folders');
-    box.innerHTML = '<div class="rail-label">Shared folders</div>' + state.folders.map(function (f) {
-      return '<a class="rail-link" href="#folder-' + f.id + '"' + (route === 'folder' && arg === f.id ? ' aria-current="page"' : '') + '>' +
-        '<svg class="icon"><use href="#i-folder"/></svg><span class="t">' + esc(f.name) + '</span><span class="n">' + f.files.length + '</span></a>';
-    }).join('');
-    document.querySelectorAll('.rail-section.nav .rail-link').forEach(function (a) {
-      if (a.getAttribute('href') === '#' + route) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
-    });
-    $('#n-req').textContent = state.requests.length;
-    $('#n-ppl').textContent = state.people.length;
-  }
-
-  // ---------- Views ----------
-  function viewOverview() {
-    var total = state.folders.reduce(function (a, f) { return a + f.files.length; }, 0);
-    var soon = 0;
-    state.folders.forEach(function (f) { f.files.forEach(function (x) { if (expires(f, x) - now < 3 * DAY) soon++; }); });
-    return '<div class="head"><div><div class="eyebrow">Shared folders</div><h1>Good afternoon, Nate</h1>' +
-      '<p>' + total + ' files across ' + state.folders.length + ' folders. ' + soon + ' will be deleted in the next 3 days.</p></div>' +
-      '<div class="actions"><button class="btn" data-act="request"><svg class="icon"><use href="#i-inbox"/></svg>Request files</button>' +
-      '<button class="btn primary" data-act="newfolder"><svg class="icon"><use href="#i-plus"/></svg>New shared folder</button></div></div>' +
-      '<div class="cards">' + state.folders.map(function (f) {
-        var size = f.files.reduce(function (a, x) { return a + x.size; }, 0);
-        var next = f.files.map(function (x) { return expires(f, x); }).sort()[0];
-        var l = next ? left(next) : null;
-        return '<a class="fcard" href="#folder-' + f.id + '"><div style="display:flex;gap:10px;align-items:center"><svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-folder"/></svg><h3>' + esc(f.name) + '</h3></div>' +
-          '<div class="row"><span>' + f.files.length + ' files · <span class="mono">' + fmtSize(size) + '</span></span><span>' + f.members.length + ' ' + (f.members.length === 1 ? 'person' : 'people') + '</span></div>' +
-          '<div class="facts"><span class="chip"><svg class="icon"><use href="#i-clock"/></svg>Deletes after ' + f.days + ' days</span>' +
-          (l ? '<span class="chip ' + l.cls + '">Next: ' + l.txt + '</span>' : '') + '</div></a>';
-      }).join('') + '</div>' + secureNote();
-  }
-
-  function secureNote() {
-    return '<div class="panel panel-b secure-note"><svg class="icon" style="color:var(--ok);width:20px;height:20px"><use href="#i-lock"/></svg>' +
-      '<div><b>How files are protected.</b> Files are encrypted in your browser before they leave your computer and stay encrypted in storage. ' +
-      'Everyone signs in with a password and a code from an authenticator app. Each folder only shows what that person was given. ' +
-      'Every upload, download, and change is recorded in the activity log.</div></div>';
-  }
-
-  function viewFolder(id) {
-    var f = folder(id);
-    if (!f) return '<div class="empty">That folder was deleted or never existed. <a href="#overview">Back to all folders</a></div>';
-    var size = f.files.reduce(function (a, x) { return a + x.size; }, 0);
-    var rows = f.files.slice().sort(function (a, b) { return b.at - a.at; }).map(function (x, i) {
-      var e = ext(x.name), l = left(expires(f, x));
-      return '<tr><td><div class="file"><span class="ext ' + e + '">' + esc(e.slice(0, 4).toUpperCase()) + '</span><div><div class="fname">' + esc(x.name) + '</div>' +
-        '<div class="fmeta">' + esc(x.by) + ' · ' + fmtWhen(x.at) + '</div></div></div></td>' +
-        '<td class="num mono">' + fmtSize(x.size) + '</td>' +
-        '<td><span class="chip ' + l.cls + '" title="Deleted ' + fmtDate(expires(f, x)) + '"><svg class="icon"><use href="#i-clock"/></svg>' + l.txt + '</span></td>' +
-        '<td class="num"><div class="actions" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn small" data-act="download" data-name="' + esc(x.name) + '"><svg class="icon"><use href="#i-down"/></svg><span class="sr">Download </span>Get</button>' +
-        '<button class="btn small danger" data-act="delete" data-name="' + esc(x.name) + '" aria-label="Delete ' + esc(x.name) + '"><svg class="icon"><use href="#i-trash"/></svg></button></div></td></tr>';
-    }).join('');
-    var people = f.members.map(function (m) {
-      var p = person(m.pid);
-      return '<div class="person"><span class="avatar">' + initials(p.name) + '</span><div style="min-width:0"><div class="nm">' + esc(p.name) + '</div>' +
-        '<div class="em">' + esc(p.email) + '</div><div class="em">Access ends ' + fmtDate(m.until) + '</div></div><span class="perm' + (m.perm === 'upload' ? ' up' : '') + '">' + permText[m.perm] + '</span></div>';
-    }).join('');
-    return '<div class="head"><div><div class="eyebrow"><a href="#overview" style="color:inherit">Shared folders</a></div><h1>' + esc(f.name) + '</h1>' +
-      '<div class="facts" style="margin-top:10px"><span class="chip"><svg class="icon"><use href="#i-clock"/></svg>Each file deleted ' + f.days + ' days after upload</span>' +
-      '<span class="chip ok"><svg class="icon"><use href="#i-lock"/></svg>Encrypted</span><span class="chip mono">' + f.files.length + ' files · ' + fmtSize(size) + '</span></div></div>' +
-      '<div class="actions"><button class="btn" data-act="invite"><svg class="icon"><use href="#i-people"/></svg>Add someone</button>' +
-      '<button class="btn primary" data-act="pick"><svg class="icon"><use href="#i-up"/></svg>Upload files</button></div></div>' +
-      '<div class="grid-2"><div class="panel">' +
-        '<div class="panel-b" style="border-bottom:1px solid var(--border)"><label class="drop" id="drop" for="file-input"><svg class="icon" style="width:26px;height:26px;color:var(--navy)"><use href="#i-up"/></svg>' +
-        '<strong>Drop files here or choose files</strong><small>Up to 250 MB each. Deleted automatically after ' + f.days + ' days.</small></label>' +
-        '<input id="file-input" type="file" multiple hidden></div>' +
-        (rows ? '<div class="table-wrap"><table><thead><tr><th>File</th><th class="num">Size</th><th>Deleted in</th><th class="num"><span class="sr">Actions</span></th></tr></thead><tbody>' + rows + '</tbody></table></div>'
-              : '<div class="empty">No files yet. Upload one, or add someone who can send you files.</div>') +
-      '</div><div style="display:grid;gap:20px"><div class="panel"><div class="panel-h"><h2>People with access</h2><button class="btn small" data-act="invite"><svg class="icon"><use href="#i-plus"/></svg>Add</button></div>' +
-        '<div class="panel-b people">' + (people || '<p class="fine">Only you can see this folder.</p>') + '</div></div>' +
-        '<div class="panel panel-b secure-note"><svg class="icon" style="color:var(--ok);width:20px;height:20px"><use href="#i-lock"/></svg><div>People with <b>Upload only</b> see just the files they sent. They never see your files or anyone else’s.</div></div>' +
-      '</div></div>';
-  }
-
-  function viewRequests() {
-    return '<div class="head"><div><div class="eyebrow">Receive files</div><h1>File requests</h1><p>Ask someone outside the commission to send you files. They sign in and upload into a private folder for you.</p></div>' +
-      '<div class="actions"><button class="btn primary" data-act="request"><svg class="icon"><use href="#i-plus"/></svg>Request files</button></div></div>' +
-      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>From</th><th>What you asked for</th><th>Sent</th><th>Status</th></tr></thead><tbody>' +
-      state.requests.map(function (r) {
-        return '<tr><td>' + esc(r.to) + '</td><td>' + esc(r.what) + '</td><td>' + fmtWhen(r.at) + '</td><td><span class="chip ' + (r.status === 'Waiting' ? 'warn' : 'ok') + '">' + esc(r.status) + '</span></td></tr>';
-      }).join('') + '</tbody></table></div></div>';
-  }
-
-  function viewPeople() {
-    return '<div class="head"><div><div class="eyebrow">Accounts</div><h1>People</h1><p>Everyone who has access to at least one folder. Only you can invite people; nobody can sign up on their own.</p></div></div>' +
-      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Organization</th><th>Folders</th><th>Second step</th></tr></thead><tbody>' +
-      state.people.map(function (p) {
-        var fs = state.folders.filter(function (f) { return f.members.some(function (m) { return m.pid === p.id; }); });
-        return '<tr><td><div class="person" style="border:0;padding:0;grid-template-columns:30px minmax(0,1fr)"><span class="avatar">' + initials(p.name) + '</span><div style="min-width:0"><div class="nm">' + esc(p.name) + '</div><div class="em">' + esc(p.email) + '</div></div></div></td>' +
-          '<td>' + esc(p.org) + '</td><td>' + fs.map(function (f) { return esc(f.name); }).join('<br>') + '</td><td><span class="chip ok">Authenticator app</span></td></tr>';
-      }).join('') + '</tbody></table></div></div>';
-  }
-
-  function viewActivity() {
-    return '<div class="head"><div><div class="eyebrow">Audit trail</div><h1>Activity log</h1><p>Every sign-in, upload, download, permission change, and automatic deletion. Entries can’t be edited or removed, including by administrators.</p></div>' +
-      '<div class="actions"><button class="btn" data-act="export"><svg class="icon"><use href="#i-down"/></svg>Export CSV</button></div></div>' +
-      '<div class="panel log">' + state.log.map(function (e) {
-        return '<div class="log-row"><time>' + fmtWhen(e.at) + '</time><div class="what"><b' + (e.bad ? ' style="color:var(--bad)"' : '') + '>' + esc(e.who) + '</b> ' + esc(e.what) +
-          (e.where ? ' in <i>' + esc(e.where) + '</i>' : '') + (e.ip ? '<div class="ip mono">' + e.ip + '</div>' : '') + '</div></div>';
-      }).join('') + '</div>';
-  }
-
-  function viewRules() {
-    var opts = [1, 7, 14, 30, 60, 90, 180];
-    function sel(id, v) { return '<select id="' + id + '">' + opts.map(function (d) { return '<option value="' + d + '"' + (d === v ? ' selected' : '') + '>' + d + (d === 1 ? ' day' : ' days') + '</option>'; }).join('') + '</select>'; }
-    return '<div class="head"><div><div class="eyebrow">Settings</div><h1>Deletion rules</h1><p>Files are removed for good when they reach their age. This keeps storage close to free and limits what could ever be exposed.</p></div></div>' +
-      '<div class="panel panel-b"><form class="form" id="rules-form" style="max-width:480px">' +
-      '<div class="field"><label for="r-default">New folders delete files after</label>' + sel('r-default', state.defaultDays) + '<span class="hint">You can pick a different time for each folder.</span></div>' +
-      '<div class="field"><label for="r-max">Longest anyone can keep a file</label>' + sel('r-max', state.maxDays) + '<span class="hint">A storage-level rule also enforces this, so files are removed even if the daily cleanup ever misses one.</span></div>' +
-      '<div class="field"><label for="r-unused">Remove people who haven’t signed in for</label><select id="r-unused"><option>30 days</option><option selected>90 days</option><option>Never</option></select></div>' +
-      '<div><button class="btn primary" type="submit">Save rules</button></div></form></div>' +
-      '<div class="panel panel-b secure-note"><svg class="icon" style="color:var(--gold);width:20px;height:20px"><use href="#i-clock"/></svg><div><b>Records note.</b> Files here are temporary transfer copies. Keep the original of any official record wherever the commission normally keeps it.</div></div>';
-  }
-
-  // ---------- Router ----------
-  var current = { route: 'overview', arg: null };
-  function route() {
-    var h = (location.hash || '').replace(/^#/, '');
-    var m = /^folder-(\w+)$/.exec(h);
-    if (m) current = { route: 'folder', arg: m[1] };
-    else if (['requests', 'people', 'activity', 'rules'].indexOf(h) >= 0) current = { route: h, arg: null };
-    else current = { route: 'overview', arg: null };
-    render();
-  }
-  function render(keepFocus) {
-    var v = $('#view');
-    var html = { overview: viewOverview, folder: function () { return viewFolder(current.arg); }, requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules }[current.route]();
-    v.innerHTML = html;
-    renderRail(current.route, current.arg);
-    if (!keepFocus) { try { v.focus({ preventScroll: true }); } catch (e) {} }
-    wireDrop();
-  }
-
-  // ---------- Uploads (preview only: reads names and sizes, uploads nothing) ----------
-  function addFiles(list) {
-    var f = folder(current.arg); if (!f || !list.length) return;
-    Array.prototype.forEach.call(list, function (file) { f.files.push({ name: file.name, size: file.size, by: 'You', at: Date.now() }); });
-    logIt('uploaded ' + list[0].name + (list.length > 1 ? ' and ' + (list.length - 1) + ' more' : ''), f.name);
-    render(true);
-    toast(list.length + (list.length === 1 ? ' file' : ' files') + ' added. In the real portal they would be encrypted and uploaded.');
-  }
-  function wireDrop() {
-    var d = $('#drop'), inp = $('#file-input'); if (!d) return;
-    inp.addEventListener('change', function () { addFiles(inp.files); inp.value = ''; });
-    ['dragenter', 'dragover'].forEach(function (ev) { d.addEventListener(ev, function (e) { e.preventDefault(); d.classList.add('over'); }); });
-    ['dragleave', 'drop'].forEach(function (ev) { d.addEventListener(ev, function (e) { e.preventDefault(); d.classList.remove('over'); }); });
-    d.addEventListener('drop', function (e) { addFiles(e.dataTransfer.files); });
-  }
-
-  // ---------- Actions ----------
-  var pendingDelete = null;
-  document.addEventListener('click', function (e) {
-    var b = e.target.closest('[data-act]'); if (!b) return;
-    var act = b.getAttribute('data-act');
-    if (act === 'newfolder') { $('#nf-form').reset(); $('#nf-ttl').value = String(state.defaultDays); $('#dlg-folder').showModal(); }
-    else if (act === 'request') { $('#rq-form').reset(); $('#dlg-request').showModal(); }
-    else if (act === 'invite') { $('#inv-form').reset(); $('#inv-sub').textContent = 'Adding to “' + folder(current.arg).name + '”. They’ll get an email invitation and set up a password and an authenticator app the first time.'; $('#dlg-invite').showModal(); }
-    else if (act === 'pick') { var i = $('#file-input'); if (i) i.click(); }
-    else if (act === 'download') { logIt('downloaded ' + b.getAttribute('data-name'), folder(current.arg).name); toast('In the real portal, ' + b.getAttribute('data-name') + ' would download and decrypt here.'); }
-    else if (act === 'delete') { pendingDelete = b.getAttribute('data-name'); $('#cf-sub').textContent = pendingDelete + ' will be removed for everyone. This can’t be undone.'; $('#dlg-confirm').showModal(); }
-    else if (act === 'export') { toast('The real portal saves the full log as a CSV file.'); }
-  });
-  $('#new-folder-btn').addEventListener('click', function () { $('#nf-form').reset(); $('#nf-ttl').value = String(state.defaultDays); $('#dlg-folder').showModal(); });
-
-  $('#dlg-folder').addEventListener('close', function () {
-    if (this.returnValue !== 'ok') return;
-    var name = $('#nf-name').value.trim() || 'Untitled folder';
-    var id = 'f' + (state.folders.length + 1) + Date.now().toString(36);
-    state.folders.push({ id: id, name: name, days: +$('#nf-ttl').value, created: Date.now(), members: [], files: [] });
-    logIt('created the folder ' + name);
-    location.hash = 'folder-' + id; toast('Folder created');
-  });
-  $('#dlg-invite').addEventListener('close', function () {
-    if (this.returnValue !== 'ok') return;
-    var f = folder(current.arg), email = $('#inv-email').value.trim(), name = $('#inv-name').value.trim() || email;
-    if (!email) return;
-    var perm = document.querySelector('input[name="perm"]:checked').value, days = +$('#inv-until').value;
-    var p = state.people.filter(function (x) { return x.email.toLowerCase() === email.toLowerCase(); })[0];
-    if (!p) { p = { id: 'p' + Date.now(), name: name, email: email, org: 'Invited' }; state.people.push(p); }
-    f.members.push({ pid: p.id, perm: perm, until: days ? Date.now() + days * DAY : Date.now() + 365 * DAY });
-    logIt('invited ' + name + ' (' + permText[perm].toLowerCase() + ')', f.name);
-    render(true); toast('Invitation ready for ' + email + '. Nothing is sent from this preview.');
-  });
-  $('#dlg-request').addEventListener('close', function () {
-    if (this.returnValue !== 'ok') return;
-    var to = $('#rq-email').value.trim(); if (!to) return;
-    state.requests.unshift({ to: to, what: $('#rq-what').value.trim() || 'Files', at: Date.now(), status: 'Waiting' });
-    logIt('requested files from ' + to);
-    if (current.route === 'requests') render(true); else location.hash = 'requests';
-    toast('Request ready for ' + to + '. Nothing is sent from this preview.');
-  });
-  $('#dlg-confirm').addEventListener('close', function () {
-    if (this.returnValue !== 'ok' || !pendingDelete) return;
-    var f = folder(current.arg);
-    f.files = f.files.filter(function (x) { return x.name !== pendingDelete; });
-    logIt('deleted ' + pendingDelete, f.name); render(true); toast('Deleted ' + pendingDelete); pendingDelete = null;
-  });
-  document.addEventListener('submit', function (e) {
-    if (e.target.id === 'rules-form') {
-      e.preventDefault();
-      state.defaultDays = +$('#r-default').value; state.maxDays = +$('#r-max').value;
-      logIt('changed deletion rules: default ' + state.defaultDays + ' days, longest ' + state.maxDays + ' days'); toast('Rules saved');
-    }
-  });
-
-  // ---------- Sign in / out ----------
-  $('#signout').addEventListener('click', function () { $('#app').hidden = true; $('#signin').hidden = false; $('#signin-1').hidden = false; $('#signin-2').hidden = true; $('#step2bar').className = ''; $('#si-email').focus(); });
-  $('#signin-1').addEventListener('submit', function (e) { e.preventDefault(); this.hidden = true; $('#signin-2').hidden = false; $('#step2bar').className = 'on'; $('#si-code').focus(); });
-  $('#signin-2').addEventListener('submit', function (e) { e.preventDefault(); $('#signin').hidden = true; $('#app').hidden = false; logIt('signed in (password and authenticator code)'); route(); });
-
-  window.addEventListener('hashchange', route);
-  route();
-})();
-</script>
 </body>
 </html>

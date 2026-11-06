@@ -45,10 +45,12 @@ service cloud.firestore {
       allow read: if isAdmin() || isMember(fid);
       allow write: if false;
 
-      // File records. Upload-only members see just the files they sent.
+      // File records. Upload-only members see just the files they sent; others see files shared with everyone
+      // in the folder or with them by name.
       match /files/{fileId} {
-        allow read: if isAdmin() || canDownload(fid)
-          || (isMember(fid) && resource.data.uploadedBy == request.auth.uid);
+        allow read: if isAdmin()
+          || (isMember(fid) && resource.data.uploadedBy == request.auth.uid)
+          || (canDownload(fid) && (resource.data.everyone == true || request.auth.uid in resource.data.visibleTo));
         allow write: if false;
       }
       match /messages/{mid} {

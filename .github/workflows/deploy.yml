@@ -1,0 +1,45 @@
+name: deploy
+
+# Deploys the Cloud Functions, Firestore/Storage rules and indexes, and the bucket's CORS and lifecycle settings:
+# to the test project first, then (after a required approval on the "production" environment) to the live one.
+# Run by hand from the Actions tab. Uses Workload Identity Federation: no keys are stored in GitHub.
+# One-time setup: docs/DEPLOY.md.
+on:
+  workflow_dispatch:
+    inputs:
+      production:
+        description: 'Also deploy to the live project after staging'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy-target.yml
+    with:
+      environment: staging
+      project: hcec-secure-transfer-staging
+      service_account_var: GCP_DEPLOY_SA_STAGING
+      wif_var: GCP_WIF_PROVIDER_STAGING
+
+  production:
+    if: ${{ inputs.production }}
+    needs: staging
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy-target.yml
+    with:
+      environment: production
+      project: hcec-secure-transfer
+      service_account_var: GCP_DEPLOY_SA_PROD
+      wif_var: GCP_WIF_PROVIDER_PROD
