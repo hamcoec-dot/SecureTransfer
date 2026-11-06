@@ -78,6 +78,18 @@ A $5 budget alert on each project.
 5. Cleanup job, lifecycle and TTL backstops, activity log page and CSV export.
 6. Staging deploy, security review, production deploy, root site 404 list and home page link.
 
+## Additions from the Verifyle feature review (2026-11-06)
+Full checklist: Claude Doc "Secure Transfer feature checklist". Added to the phases:
+- Phase 2: passkeys (WebAuthn) as an alternative to password + TOTP; per-person "no self-service reset".
+- Phase 3: immutable uploads (no overwrite), allowed file-type list, SHA-256 fingerprint per file.
+- Phase 4: encrypted message thread per folder, private 1:1 threads, encrypted folder notes, per-file
+  visibility checkboxes, optional public drop-off page gated by a code.
+- Phase 5: hash-chained (tamper-evident) audit log, download receipts and new-upload emails, new-device
+  sign-in alerts, download limits / delete-after-download.
+- Phase 6: installable on phones (web app manifest), WCAG 2.1 AA check, HSTS check on the domain.
+- Phase 7 (after go-live): signature requests on PDFs with a certificate page (who, when, fingerprint).
+- Skipped: billing/payments, password vault, PDF editing.
+
 ## What Nate does
 - Phase 2: create the two Firebase projects on his billing account (steps will be in docs/DEPLOY.md) or let the
   work run on his PC with his signed-in Firebase CLI from `C:\Projects\SecureTransfer`.
