@@ -1,0 +1,15 @@
+{
+  "name": "secure-transfer-functions",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "engines": { "node": "22" },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "firebase-admin": "^13.4.0",
+    "firebase-functions": "^6.4.0",
+    "nodemailer": "^7.0.5"
+  }
+}
