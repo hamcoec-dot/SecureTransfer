@@ -1,0 +1,22 @@
+# Public repo: never commit secrets.
+*.key
+*.pem
+*.p12
+*-key.json
+*service-account*.json
+*serviceAccount*.json
+credentials*.json
+recovery-key*
+.env
+.env.*
+!.env.example
+.runtimeconfig.json
+# Firebase local state
+.firebase/
+firebase-debug*.log
+firestore-debug.log
+ui-debug.log
+emulator-data/
+# Node
+node_modules/
+coverage/

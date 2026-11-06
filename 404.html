@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Page not found</title>
+<script>
+  // GitHub Pages paths are case-sensitive, so /SecureTransfer/Index.html would 404.
+  // If the address matches one of this site's pages apart from capitalisation, go to the real page.
+  (function () {
+    var pages = ["index.html"];
+    var base = '/' + location.pathname.split('/')[1] + '/';
+    var rest = decodeURIComponent(location.pathname.slice(base.length)).replace(/\/+$/, '').toLowerCase();
+    for (var i = 0; i < pages.length; i++) {
+      var page = pages[i];
+      var slash = page.lastIndexOf('/');
+      var dir = page.slice(0, slash + 1);
+      var dirKey = dir.replace(/\/+$/, '').toLowerCase();
+      var isIndex = page.slice(slash + 1).toLowerCase() === 'index.html';
+      var target = null;
+      if (rest === page.toLowerCase()) target = page;
+      else if (isIndex && rest === dirKey) target = page.slice(slash + 1) === 'index.html' ? dir : page;
+      if (target !== null) {
+        var url = base + target.split('/').map(encodeURIComponent).join('/');
+        if (url !== location.pathname) location.replace(url + location.search + location.hash);
+        return;
+      }
+    }
+  })();
+</script>
+<style>
+  body { font: 18px/1.5 system-ui, sans-serif; margin: 0; padding: 48px 16px; background: #fff; color: #1a1a1a; text-align: center; }
+  a { color: #0b4f9c; }
+</style>
+</head>
+<body>
+  <h1>Page not found</h1>
+  <p><a href="/SecureTransfer/">Go to the start page</a> or <a href="/">govotehamiltontn.gov</a>.</p>
+</body>
+</html>
