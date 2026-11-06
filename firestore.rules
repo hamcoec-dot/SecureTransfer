@@ -8,7 +8,7 @@ service cloud.firestore {
       return request.auth != null
         && request.auth.token.firebase.sign_in_second_factor != null;
     }
-    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+    function isAdmin() { return signedIn() && request.auth.token.get('admin', false) == true; }
     function member(fid) {
       return get(/databases/$(database)/documents/folders/$(fid)).data.members[request.auth.uid];
     }

@@ -12,7 +12,7 @@ service firebase.storage {
     }
     function canUpload(fid) {
       return signedIn() && (
-        request.auth.token.admin == true
+        request.auth.token.get('admin', false) == true
         || (request.auth.uid in folder(fid).members
             && folder(fid).members[request.auth.uid].perm in ['upload', 'both']
             && folder(fid).members[request.auth.uid].until > request.time));

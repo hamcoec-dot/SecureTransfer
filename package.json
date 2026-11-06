@@ -1,0 +1,14 @@
+{
+  "name": "secure-transfer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "test:rules": "firebase emulators:exec --only firestore,storage --project demo-secure-transfer \"node --test test/rules.emu.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.10.0",
+    "firebase-tools": "^14.27.0"
+  }
+}
