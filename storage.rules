@@ -1,0 +1,35 @@
+rules_version = '2';
+// Only ciphertext is stored. Nobody reads objects directly: downloads go through a function that checks access,
+// logs the download and returns a short-lived signed URL. Uploads: a folder member allowed to upload (or an admin)
+// may create a new object once; objects can never be overwritten.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null && request.auth.token.firebase.sign_in_second_factor != null;
+    }
+    function folder(fid) {
+      return firestore.get(/databases/(default)/documents/folders/$(fid)).data;
+    }
+    function canUpload(fid) {
+      return signedIn() && (
+        request.auth.token.admin == true
+        || (request.auth.uid in folder(fid).members
+            && folder(fid).members[request.auth.uid].perm in ['upload', 'both']
+            && folder(fid).members[request.auth.uid].until > request.time));
+    }
+
+    match /folders/{fid}/{uid}/{fileId} {
+      allow read: if false;
+      allow create: if canUpload(fid)
+        && request.auth.uid == uid
+        && resource == null
+        && request.resource.size <= 250 * 1024 * 1024
+        && request.resource.contentType == 'application/octet-stream';
+      allow update, delete: if false;
+    }
+
+    match /{all=**} {
+      allow read, write: if false;
+    }
+  }
+}

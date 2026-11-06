@@ -1,0 +1,73 @@
+rules_version = '2';
+// Secure Transfer. Changes to access (folders, members, invitations, file records, audit) are written only by
+// the Cloud Functions (Admin SDK bypasses these rules). Clients read what they are entitled to, and manage only
+// their own key material. Every rule requires a sign-in that completed the authenticator (TOTP) step.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_second_factor != null;
+    }
+    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+    function member(fid) {
+      return get(/databases/$(database)/documents/folders/$(fid)).data.members[request.auth.uid];
+    }
+    function isMember(fid) {
+      return signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/folders/$(fid)).data.members
+        && member(fid).until > request.time;
+    }
+    function canDownload(fid) { return isMember(fid) && member(fid).perm in ['download', 'both']; }
+
+    // Public half of each person's key pair: anyone signed in may read it to share files with them.
+    match /publicKeys/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['jwk', 'createdAt'])
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false; // replaced only by a function after a reset
+    }
+    // Private key, wrapped in the browser with a key from the person's password. Only its owner reads it.
+    match /privateKeys/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['wrapped', 'salt', 'iv', 'iterations', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow write: if false;
+    }
+
+    match /folders/{fid} {
+      allow read: if isAdmin() || isMember(fid);
+      allow write: if false;
+
+      // File records. Upload-only members see just the files they sent.
+      match /files/{fileId} {
+        allow read: if isAdmin() || canDownload(fid)
+          || (isMember(fid) && resource.data.uploadedBy == request.auth.uid);
+        allow write: if false;
+      }
+      match /messages/{mid} {
+        allow read: if isAdmin() || isMember(fid);
+        allow write: if false;
+      }
+    }
+
+    match /audit/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /settings/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /{other=**} {
+      allow read, write: if false;
+    }
+  }
+}

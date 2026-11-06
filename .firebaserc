@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "hcec-secure-transfer-staging",
+    "staging": "hcec-secure-transfer-staging",
+    "prod": "hcec-secure-transfer"
+  }
+}
