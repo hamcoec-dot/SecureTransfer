@@ -122,6 +122,34 @@ function dialog({ title, sub = '', body = '', ok = 'OK', danger = false, cancel 
 const daySelect = (name, value, max = 180) => `<select name="${name}" id="${name}">${DAYS.filter((d) => d <= max).map((d) =>
   `<option value="${d}"${d === value ? ' selected' : ''}>${d === 1 ? '1 day' : d + ' days'}</option>`).join('')}</select>`;
 
+// ---------------------------------------------------------------- key cache for this tab
+// The unlocked private key is kept as a non-exportable CryptoKey in IndexedDB so a reload of the same tab
+// doesn't ask for the password again. A marker in sessionStorage ties it to this tab: a new tab or a closed
+// browser finds no marker and wipes the cached key. Sign-out and idle sign-out wipe it too.
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('secure-transfer', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('keys');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function idbDo(mode, fn) {
+  const d = await idb();
+  return new Promise((res, rej) => { const t = d.transaction('keys', mode); const out = fn(t.objectStore('keys')); t.oncomplete = () => res(out.result); t.onerror = () => rej(t.error); });
+}
+async function cacheKey(uid, key) {
+  try { sessionStorage.setItem('st-tab', uid); await idbDo('readwrite', (st) => st.put(key, uid)); } catch {}
+}
+async function cachedKey(uid) {
+  try {
+    if (sessionStorage.getItem('st-tab') !== uid) { await clearKeys(); return null; }
+    return (await idbDo('readonly', (st) => st.get(uid))) || null;
+  } catch { return null; }
+}
+async function clearKeys() {
+  try { sessionStorage.removeItem('st-tab'); await idbDo('readwrite', (st) => st.clear()); } catch {}
+}
+
 // ---------------------------------------------------------------- sign-in
 let resolver = null, pendingPassword = '', enrollSecret = null;
 function showStep(id) {
@@ -258,6 +286,7 @@ $('#forgot').addEventListener('click', async () => {
 $('#signout').addEventListener('click', () => signOutNow('Signed out.'));
 async function signOutNow(msg) {
   S.privateKey = null; S.files = {}; S.folders = [];
+  await clearKeys();
   await signOut(auth).catch(() => {});
   if (msg) toast(msg);
 }
@@ -291,19 +320,24 @@ onAuthStateChanged(auth, async (user) => {
     route();
   } catch (err) {
     await signOutNow();
+    showSignIn();
     $('#err-pass').textContent = errText(err);
   }
 });
 
 /** Make or unlock this person's key pair with the password they just typed. */
 async function unlockKeys(user, needsKey) {
-  if (!pendingPassword) throw new Error('Please sign in again to unlock your files.');
+  if (!pendingPassword) {
+    const k = needsKey ? null : await cachedKey(user.uid);
+    if (k) { S.privateKey = k; return; }
+    throw new Error('Please sign in again to unlock your files.');
+  }
   $('#busy-text').textContent = 'Unlocking your files…';
   const privRef = doc(db, `privateKeys/${user.uid}`);
   if (!needsKey) {
     const snap = await getDoc(privRef);
     if (snap.exists()) {
-      try { S.privateKey = await C.unwrapPrivateKey(snap.data(), pendingPassword); return; }
+      try { S.privateKey = await C.unwrapPrivateKey(snap.data(), pendingPassword); await cacheKey(user.uid, S.privateKey); return; }
       catch { /* password was reset: fall through and make a new key */ }
     }
   }
@@ -314,6 +348,7 @@ async function unlockKeys(user, needsKey) {
   if (needsKey) await setDoc(doc(db, `publicKeys/${user.uid}`), { jwk: kp.publicJwk, createdAt: serverTimestamp() });
   else { await api.replaceKey({ jwk: kp.publicJwk }); toast('Your password changed, so older files must be re-shared with you by the Commission.'); }
   S.privateKey = await C.unwrapPrivateKey(wrapped, pendingPassword);
+  await cacheKey(user.uid, S.privateKey);
 }
 
 // ---------------------------------------------------------------- data
