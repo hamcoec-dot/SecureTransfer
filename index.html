@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="css/app.css?v=2">
 <script src="js/vendor/qrcode.js" defer></script>
-<script type="module" src="js/app.js?v=2"></script>
+<script type="module" src="js/app.js?v=3"></script>
 </head>
 <body>
 <a class="sr" href="#view">Skip to main content</a>
@@ -104,6 +104,23 @@
   </div>
 </section>
 
+<!-- ============ Quick send: recipient page (no account) ============ -->
+<section id="sendpage" class="signin" hidden aria-label="Download a file">
+  <div class="signin-card">
+    <div class="brand"><svg class="seal" aria-hidden="true"><use href="#seal"/></svg>
+      <div><div class="brand-name">A file for you</div><div class="brand-sub">Hamilton County Election Commission</div></div></div>
+    <form id="f-send" class="form" novalidate>
+      <p class="fine" id="send-about">Checking the link…</p>
+      <div class="field" id="send-pass-field" hidden><label for="send-pass">Password</label>
+        <input id="send-pass" type="password" autocomplete="off"><span class="hint">The Election Commission gave you this separately from the link.</span></div>
+      <p class="field-error" id="err-send" role="alert"></p>
+      <button class="btn primary" type="submit" id="send-btn" style="justify-content:center" disabled>Download</button>
+      <p class="fine" id="send-status" role="status"></p>
+      <p class="fine">The file is decrypted on this device. Nobody else, including the server, can read it.</p>
+    </form>
+  </div>
+</section>
+
 <!-- ============ App ============ -->
 <div id="app" class="shell" hidden>
   <nav class="rail" aria-label="Secure Transfer">
@@ -113,6 +130,7 @@
     <div class="rail-section folders" id="rail-folders"></div>
     <div class="rail-section nav admin-only">
       <div class="rail-label">Manage</div>
+      <a class="rail-link" href="#sends"><svg class="icon"><use href="#i-up"/></svg><span class="t">Quick send</span><span class="n"></span></a>
       <a class="rail-link" href="#requests"><svg class="icon"><use href="#i-inbox"/></svg><span class="t">File requests</span><span class="n"></span></a>
       <a class="rail-link" href="#people"><svg class="icon"><use href="#i-people"/></svg><span class="t">People</span><span class="n"></span></a>
       <a class="rail-link" href="#activity"><svg class="icon"><use href="#i-log"/></svg><span class="t">Activity log</span><span class="n"></span></a>

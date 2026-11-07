@@ -34,7 +34,7 @@ const call = (name) => async (data) => (await httpsCallable(fns, name, { timeout
 const api = Object.fromEntries(['recordSignIn', 'invite', 'updateMember', 'removeUser', 'approveReset', 'replaceKey',
   'listFolders', 'createFolder', 'updateFolder', 'deleteFolder', 'recipients', 'finalizeUpload', 'getDownload', 'deleteFile',
   'addFileKeys', 'postMessage', 'openThread', 'createDropoff', 'dropoffStart', 'dropoffFinish', 'saveSettings',
-  'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus'].map((n) => [n, call(n)]));
+  'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus', 'createSend', 'sendInfo', 'sendOpen', 'deleteSend'].map((n) => [n, call(n)]));
 
 // ---------------------------------------------------------------- state
 const S = { user: null, admin: false, name: '', privateKey: null, folders: [], files: {}, people: [], route: 'overview', arg: null };
@@ -130,7 +130,7 @@ function showStep(id) {
   $(id).querySelector('input')?.focus();
 }
 function showSignIn() {
-  $('#app').hidden = true; $('#dropoff').hidden = true; $('#signin').hidden = false;
+  $('#app').hidden = true; $('#dropoff').hidden = true; $('#sendpage').hidden = true; $('#signin').hidden = false;
   if (resetCode) return;
   showStep('#f-pass');
 }
@@ -267,8 +267,10 @@ let idleT;
 function bumpIdle() { clearTimeout(idleT); if (S.user) idleT = setTimeout(() => signOutNow('Signed out after 30 minutes without activity.'), IDLE_MINUTES * 60e3); }
 ['pointerdown', 'keydown', 'scroll'].forEach((ev) => addEventListener(ev, bumpIdle, { passive: true }));
 
+const isPublicLink = () => location.hash.startsWith('#dropoff-') || location.hash.startsWith('#send-');
+function showPublicLink() { return location.hash.startsWith('#send-') ? showSendPage() : showDropoff(); }
 onAuthStateChanged(auth, async (user) => {
-  if (location.hash.startsWith('#dropoff-')) return showDropoff();
+  if (isPublicLink()) return showPublicLink();
   if (!user) { S.user = null; return showSignIn(); }
   const tok = await user.getIdTokenResult();
   if (!tok.claims.firebase?.sign_in_second_factor) return; // still in enrollment
@@ -382,19 +384,19 @@ function renderRail() {
 }
 async function route() {
   const h = location.hash.replace(/^#/, '');
-  if (h.startsWith('dropoff-')) return showDropoff();
+  if (isPublicLink()) return showPublicLink();
   const m = /^folder-([\w-]+)$/.exec(h);
   if (m) { S.route = 'folder'; S.arg = m[1]; }
-  else if (S.admin && ['requests', 'people', 'activity', 'rules'].includes(h)) { S.route = h; S.arg = null; }
+  else if (S.admin && ['sends', 'requests', 'people', 'activity', 'rules'].includes(h)) { S.route = h; S.arg = null; }
   else { S.route = 'overview'; S.arg = null; }
   await render();
 }
-addEventListener('hashchange', () => { if (S.user) route(); else if (location.hash.startsWith('#dropoff-')) showDropoff(); });
+addEventListener('hashchange', () => { if (isPublicLink()) showPublicLink(); else if (S.user) route(); else showSignIn(); });
 
 async function render(keepFocus) {
   const v = $('#view');
   try {
-    const html = await ({ overview: viewOverview, folder: () => viewFolder(S.arg), requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules }[S.route])();
+    const html = await ({ sends: viewSends, overview: viewOverview, folder: () => viewFolder(S.arg), requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules }[S.route])();
     v.innerHTML = html;
   } catch (err) {
     v.innerHTML = `<div class="panel panel-b">Couldn’t load this page: ${esc(errText(err))}</div>`;
@@ -506,6 +508,67 @@ async function sealText(f, text, context) {
   const keys = {};
   for (const r of recipients) keys[r.id] = await C.wrapFileKey(key, r.id, r.publicJwk);
   return { box, keys };
+}
+
+async function viewSends() {
+  const snap = await getDocs(query(collection(db, 'sends'), orderBy('createdAt', 'desc'), limit(100)));
+  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const out = [];
+  for (const x of rows) {
+    let nm = x.label || 'File';
+    if (x.keys?.[S.user.uid]) { try { const k = await C.unwrapFileKey(x.keys[S.user.uid], S.user.uid, S.privateKey); nm = await C.decryptText(k, x.name, 'file name v1'); } catch {} }
+    const l = left(tsMs(x.expiresAt));
+    const used = x.downloads >= x.maxDownloads;
+    out.push(`<tr><td><div class="fname">${esc(nm)}</div>${x.label && x.label !== nm ? `<div class="fmeta">${esc(x.label)}</div>` : ''}<div class="fmeta">${fmtWhen(x.createdAt)}${x.hasPassword ? ' · password' : ''}</div></td>
+      <td class="mono">${x.downloads} of ${x.maxDownloads}</td>
+      <td>${used ? '<span class="chip ok">Downloaded</span>' : `<span class="chip ${l.cls}"><svg class="icon"><use href="#i-clock"/></svg>${l.txt}</span>`}</td>
+      <td class="num"><button class="btn small danger" data-act="deletesend" data-id="${x.id}">Delete now</button></td></tr>`);
+  }
+  return `<div class="head"><div><div class="eyebrow">Send without an account</div><h1>Quick send</h1>
+    <p>Send one file with a link and an optional password. The recipient doesn’t need an account. The file is deleted after its downloads are used or it expires, whichever comes first.</p></div>
+    <div class="actions"><button class="btn primary" data-act="newsend"><svg class="icon"><use href="#i-plus"/></svg>New quick send</button></div></div>
+    <div class="panel"><div class="table-wrap"><table><thead><tr><th>File</th><th>Downloads</th><th>Status</th><th><span class="sr">Actions</span></th></tr></thead><tbody>
+    ${out.join('') || '<tr><td colspan="4" class="empty">Nothing sent yet.</td></tr>'}</tbody></table></div></div>`;
+}
+
+function randomPassword() {
+  const words = ['river', 'maple', 'lantern', 'harbor', 'copper', 'meadow', 'granite', 'willow', 'summit', 'cedar', 'falcon', 'orchard', 'beacon', 'canyon', 'prairie', 'timber', 'quarry', 'saddle', 'thistle', 'voyage'];
+  const r = crypto.getRandomValues(new Uint32Array(4));
+  return [words[r[0] % 20], words[r[1] % 20], words[r[2] % 20], String(r[3] % 900 + 100)].join('-');
+}
+
+async function newQuickSend(s) {
+  const pw = randomPassword();
+  const r = await dialog({ title: 'New quick send', ok: 'Encrypt and create link',
+    sub: 'The recipient gets a link. Give them the password another way, for example by phone or text.',
+    body: `<div class="field"><label for="qs-file">File</label><input type="file" id="qs-file" name="file" required></div>
+      <div class="field"><label for="label">What is it? (shown to them)</label><input name="label" id="label" maxlength="100" placeholder="For example: Your voter registration record"></div>
+      <div class="field"><label for="qs-pw">Password</label><div class="linkbox"><input id="qs-pw" name="pw" value="${pw}" class="mono" autocomplete="off"></div>
+        <span class="hint">Clear it to send with the link alone (less safe: anyone with the link can download).</span></div>
+      <div class="field"><label for="maxDownloads">Downloads allowed</label><select name="maxDownloads" id="maxDownloads"><option value="1" selected>1</option><option value="2">2</option><option value="5">5</option><option value="10">10</option></select></div>
+      <div class="field"><label for="days">Delete after</label>${daySelect('days', Math.min(7, s.maxDays), s.maxDays)}</div>` });
+  if (!r) return;
+  const file = document.getElementById('qs-file').files[0];
+  if (!file) return toast('Choose a file.');
+  if (file.size > MAX || !ALLOWED.includes(extOf(file.name))) return toast('Files must be under 250 MB and a document, spreadsheet, image, text or zip file.');
+  toast('Encrypting…');
+  const rec = await getDoc(doc(db, 'settings/recovery'));
+  if (!rec.exists()) return toast('Create the recovery key in Settings first.');
+  const mine = await getDoc(doc(db, `publicKeys/${S.user.uid}`));
+  const sealed = await C.sealSend(new Uint8Array(await file.arrayBuffer()), file.name, r.pw.trim(),
+    [{ id: S.user.uid, publicJwk: mine.data().jwk }, { id: 'recovery', publicJwk: rec.data().jwk }]);
+  const fileId = C.b64url(crypto.getRandomValues(new Uint8Array(15)));
+  toast('Uploading…');
+  const task = uploadBytesResumable(sref(storage, `sends/${S.user.uid}/${fileId}`), sealed.ciphertext, { contentType: 'application/octet-stream' });
+  await new Promise((res, rej) => task.on('state_changed', null, rej, res));
+  const { id } = await api.createSend({ fileId, name: sealed.name, sha256: sealed.sha256, size: file.size, keys: sealed.keys, ext: extOf(file.name),
+    accessHash: sealed.accessHash, salt: sealed.salt, iterations: sealed.iterations, hasPassword: !!r.pw.trim(), label: r.label,
+    maxDownloads: Number(r.maxDownloads), days: Number(r.days) });
+  const link = `${PORTAL_URL}${MODE === 'staging' ? '?staging' : ''}#send-${id}.${sealed.secret}`;
+  await dialog({ title: 'Link ready', ok: 'Done', cancel: '', sub: 'This is the only time the link is shown. The server doesn’t keep a copy, so copy it now.',
+    body: `<div class="field"><label for="ql">Link</label><div class="linkbox"><input id="ql" readonly value="${esc(link)}"><button class="btn small" type="button" data-copy="ql">Copy</button></div></div>
+      ${r.pw.trim() ? `<div class="field"><label for="qp">Password (send separately)</label><div class="linkbox"><input id="qp" readonly class="mono" value="${esc(r.pw.trim())}"><button class="btn small" type="button" data-copy="qp">Copy</button></div></div>` : ''}` });
+  if (S.route === 'sends') await render(true); else location.hash = 'sends';
 }
 
 async function viewRequests() {
@@ -669,6 +732,12 @@ async function downloadFile(id, recoveryKey = null) {
 
 // ---------------------------------------------------------------- actions
 document.addEventListener('click', async (e) => {
+  const cp = e.target.closest('[data-copy]');
+  if (cp) {
+    const el = document.getElementById(cp.dataset.copy);
+    try { await navigator.clipboard.writeText(el.value); toast('Copied.'); } catch { el.select(); }
+    return;
+  }
   const b = e.target.closest('[data-act]');
   if (!b || !S.user) return;
   const act = b.dataset.act;
@@ -772,6 +841,12 @@ document.addEventListener('click', async (e) => {
     } else if (act === 'verifylog') {
       const r = await api.verifyLog({});
       toast(r.ok ? `All ${r.count} entries check out. Nothing was changed or removed.` : `Problem found${r.seq ? ' at entry ' + r.seq : ''}: ${r.reason}.`);
+    } else if (act === 'newsend') {
+      await newQuickSend(s);
+    } else if (act === 'deletesend') {
+      const ok = await dialog({ title: 'Delete this quick send now?', sub: 'The link stops working right away.', ok: 'Delete now', danger: true });
+      if (!ok) return;
+      await api.deleteSend({ id: b.dataset.id }); await render(true); toast('Deleted.');
     } else if (act === 'makerecovery') {
       await makeRecoveryKey();
     }
@@ -814,7 +889,7 @@ document.addEventListener('submit', async (e) => {
 
 // ---------------------------------------------------------------- drop-off (no account)
 function showDropoff() {
-  $('#app').hidden = true; $('#signin').hidden = true; $('#dropoff').hidden = false;
+  $('#app').hidden = true; $('#signin').hidden = true; $('#sendpage').hidden = true; $('#dropoff').hidden = false;
 }
 $('#f-drop').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -843,4 +918,51 @@ $('#f-drop').addEventListener('submit', async (e) => {
   } catch (ex) { status.textContent = ''; err.textContent = errText(ex); }
 });
 
-if (location.hash.startsWith('#dropoff-')) showDropoff();
+if (isPublicLink()) showPublicLink();
+
+// ---------------------------------------------------------------- quick send: recipient page (no account)
+let sendMeta = null;
+async function showSendPage() {
+  $('#app').hidden = true; $('#signin').hidden = true; $('#dropoff').hidden = true; $('#sendpage').hidden = false;
+  const [id, secret] = location.hash.replace('#send-', '').split('.');
+  if (!id || !secret) { $('#send-about').textContent = 'This link is not complete. Copy the whole link, including everything after the # sign.'; return; }
+  try {
+    sendMeta = await api.sendInfo({ id });
+    $('#send-about').innerHTML = `${sendMeta.label ? `<b>${esc(sendMeta.label)}</b><br>` : ''}${fmtSize(sendMeta.size)} · ` +
+      `${sendMeta.remaining === 1 ? 'can be downloaded once' : `${sendMeta.remaining} downloads left`} · available until ${fmtDate(sendMeta.expiresAt)}`;
+    $('#send-pass-field').hidden = !sendMeta.hasPassword;
+    $('#send-btn').disabled = false;
+    if (sendMeta.hasPassword) $('#send-pass').focus();
+  } catch (err) {
+    $('#send-about').textContent = errText(err);
+  }
+}
+$('#f-send').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!sendMeta) return;
+  const [id, secret] = location.hash.replace('#send-', '').split('.');
+  const pw = sendMeta.hasPassword ? $('#send-pass').value : '';
+  const status = $('#send-status'), err = $('#err-send');
+  err.textContent = '';
+  if (sendMeta.hasPassword && !pw) { err.textContent = 'Enter the password.'; return; }
+  try {
+    $('#send-btn').disabled = true;
+    status.textContent = 'Checking…';
+    const access = await C.sendAccess(secret, pw, sendMeta.salt, sendMeta.iterations);
+    const r = await api.sendOpen({ id, access });
+    status.textContent = 'Downloading…';
+    const res = await fetch(r.url, { referrerPolicy: 'no-referrer' });
+    if (!res.ok) throw new Error('The download didn\u2019t finish. Reload the page and try again.');
+    const ct = new Uint8Array(await res.arrayBuffer());
+    status.textContent = 'Decrypting…';
+    const out = await C.openSend(secret, pw, sendMeta.salt, sendMeta.iterations, { name: r.name, sha256: r.sha256, ciphertext: ct });
+    saveBlob(out.data, out.fileName);
+    status.innerHTML = `Saved <b>${esc(out.fileName)}</b>. Fingerprint <span class="mono">${out.sha256.slice(0, 16)}\u2026</span> matches what was sent.`;
+    sendMeta.remaining -= 1;
+    if (sendMeta.remaining > 0) $('#send-btn').disabled = false;
+  } catch (ex) {
+    $('#send-btn').disabled = false;
+    status.textContent = '';
+    err.textContent = errText(ex);
+  }
+});

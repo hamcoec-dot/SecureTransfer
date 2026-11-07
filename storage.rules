@@ -28,6 +28,17 @@ service firebase.storage {
       allow update, delete: if false;
     }
 
+    // Quick sends: an administrator uploads the encrypted file once; it is read only through a signed link.
+    match /sends/{uid}/{fileId} {
+      allow read: if false;
+      allow create: if signedIn() && request.auth.token.get('admin', false) == true
+        && request.auth.uid == uid
+        && resource == null
+        && request.resource.size <= 250 * 1024 * 1024
+        && request.resource.contentType == 'application/octet-stream';
+      allow update, delete: if false;
+    }
+
     match /{all=**} {
       allow read, write: if false;
     }

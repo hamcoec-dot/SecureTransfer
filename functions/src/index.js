@@ -8,7 +8,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { beforeUserCreated, beforeUserSignedIn, HttpsError as IdentityError } from 'firebase-functions/v2/identity';
 import { setGlobalOptions, logger } from 'firebase-functions/v2';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import * as L from './lib.js';
 import { sendMail, mailConfigured, SMTP_URL } from './mail.js';
 
@@ -546,6 +546,82 @@ export const dropoffFinish = onCall(callOpts, async (req) => {
   return { ok: true };
 });
 
+// ---------------------------------------------------------------- quick send (link + optional password)
+export const createSend = onCall(callOpts, async (req) => {
+  const u = requireAdmin(req);
+  const s = await settings();
+  const { fileId, name, sha256, size, keys, ext, accessHash, salt, iterations, hasPassword, label } = req.data || {};
+  if (!/^[A-Za-z0-9_-]{8,40}$/.test(String(fileId))) throw new HttpsError('invalid-argument', 'Bad file id.');
+  if (!L.extensionAllowed('x.' + ext)) throw new HttpsError('invalid-argument', 'That type of file can’t be sent.');
+  if (!/^[0-9a-f]{64}$/.test(String(accessHash)) || !/^[0-9a-f]{64}$/.test(String(sha256))) throw new HttpsError('invalid-argument', 'Bad request.');
+  if (!keysValid(keys, [u.uid, 'recovery'])) throw new HttpsError('invalid-argument', 'The file must be shared with you and the recovery key.');
+  const days = checkDays(req.data?.days ?? 7, s.maxDays);
+  const maxDownloads = Math.min(10, Math.max(1, Number(req.data?.maxDownloads) || 1));
+  const path = `sends/${u.uid}/${fileId}`;
+  const [exists] = await bucket().file(path).exists();
+  if (!exists) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
+  const [meta] = await bucket().file(path).getMetadata();
+  const id = L.newId(12);
+  const now = Date.now();
+  await db.doc(`sends/${id}`).set({
+    path, name, sha256, ext: String(ext).toLowerCase(), size: Number(meta.size), plainSize: Number(size) || 0, keys,
+    accessHash, salt: String(salt), iterations: Number(iterations) || 600000, hasPassword: hasPassword === true,
+    label: L.cleanText(label, 100), createdBy: u.uid, creatorEmail: u.email, createdAt: now,
+    expiresAt: Timestamp.fromMillis(now + days * L.DAY_MS), maxDownloads, downloads: 0, failures: 0,
+  });
+  await audit('send.create', { file: id, note: `${L.cleanText(label, 100) || 'quick send'}; ${maxDownloads} download(s), ${days} days${hasPassword ? ', password' : ''}` }, req);
+  return { id };
+});
+
+async function sendFor(id) {
+  const ref = db.doc(`sends/${String(id || '').slice(0, 40)}`);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'This link has expired or was already used.');
+  const d = snap.data();
+  if (ms(d.expiresAt) < Date.now() || d.downloads >= d.maxDownloads) throw new HttpsError('not-found', 'This link has expired or was already used.');
+  return { ref, d };
+}
+
+/** Anyone with the link: what the page needs to ask for (never the file name). */
+export const sendInfo = onCall(callOpts, async (req) => {
+  const { d } = await sendFor(req.data?.id);
+  return { hasPassword: d.hasPassword, salt: d.salt, iterations: d.iterations, expiresAt: ms(d.expiresAt),
+    remaining: d.maxDownloads - d.downloads, size: d.plainSize || d.size, label: d.label || '' };
+});
+
+/** Anyone with the link (and password): check access, count the download, return a 5-minute link. */
+export const sendOpen = onCall(callOpts, async (req) => {
+  const { ref, d } = await sendFor(req.data?.id);
+  if (d.failures >= 10) throw new HttpsError('resource-exhausted', 'Too many wrong passwords. Ask the Election Commission to send it again.');
+  const given = createHash('sha256').update(String(req.data?.access || '')).digest('hex');
+  const a = Buffer.from(given, 'hex'), b = Buffer.from(d.accessHash, 'hex');
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    await ref.update({ failures: FieldValue.increment(1) });
+    await audit('send.bad-password', { file: ref.id, actor: 'anonymous' }, req);
+    throw new HttpsError('permission-denied', d.hasPassword ? 'That password is not right.' : 'This link is not complete. Copy the whole link.');
+  }
+  const after = d.downloads + 1;
+  const patch = { downloads: FieldValue.increment(1), lastDownloadAt: Date.now() };
+  if (after >= d.maxDownloads) patch.expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60e3); // removed by cleanup
+  await ref.update(patch);
+  const [url] = await bucket().file(d.path).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 5 * 60e3 });
+  await audit('send.download', { file: ref.id, actor: 'link', note: `${after} of ${d.maxDownloads}` }, req);
+  await notify(d.creatorEmail, 'Secure Transfer: your quick send was downloaded',
+    `Your quick send${d.label ? ` "${d.label}"` : ''} was downloaded (${after} of ${d.maxDownloads}) on ` +
+    `${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}, from IP ${req.rawRequest?.ip || 'unknown'}.` +
+    (after >= d.maxDownloads ? ' It has reached its limit and will be deleted within 10 minutes.' : ''));
+  return { url, name: d.name, sha256: d.sha256 };
+});
+
+export const deleteSend = onCall(callOpts, async (req) => {
+  requireAdmin(req);
+  const ref = db.doc(`sends/${String(req.data?.id || '')}`);
+  const snap = await ref.get();
+  if (snap.exists) { await bucket().file(snap.data().path).delete({ ignoreNotFound: true }); await ref.delete(); }
+  await audit('send.delete', { file: ref.id }, req);
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------- settings, log export
 export const saveSettings = onCall(callOpts, async (req) => {
   requireAdmin(req);
@@ -599,6 +675,12 @@ export async function runCleanup(now = Date.now()) {
   const due = await db.collectionGroup('files').where('expiresAt', '<=', Timestamp.fromMillis(now)).limit(500).get();
   let files = 0;
   for (const d of due.docs) {
+    await bucket().file(d.data().path).delete({ ignoreNotFound: true });
+    await d.ref.delete();
+    files++;
+  }
+  const sends = await db.collection('sends').where('expiresAt', '<=', Timestamp.fromMillis(now)).limit(500).get();
+  for (const d of sends.docs) {
     await bucket().file(d.data().path).delete({ ignoreNotFound: true });
     await d.ref.delete();
     files++;

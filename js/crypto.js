@@ -228,3 +228,55 @@ export async function openFile(sealed, id, privateKey, onProgress) {
   if (sealed.sha256 && sha256 !== sealed.sha256) throw new Error('Fingerprint does not match.');
   return { data, fileName, sha256 };
 }
+
+// ---------- Quick send (a link, and optionally a password, instead of an account) ----------
+// The link's fragment carries a random secret that never reaches the server. With a password, the key also
+// depends on PBKDF2(password), so the link alone is not enough. The server only ever sees a hash of an "access"
+// value derived from the same inputs, which it checks before handing out the encrypted file.
+const SEND_INFO_KEY = 'HCEC Secure Transfer send file key v1';
+const SEND_INFO_ACCESS = 'HCEC Secure Transfer send access v1';
+
+export function b64url(bytes) { return toB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+export function fromB64url(s) { return fromB64(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); }
+
+async function sendMaterial(secret, password, salt, iterations) {
+  let ikm = secret;
+  if (password) {
+    const base = await subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+    const p = new Uint8Array(await subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, 256));
+    ikm = new Uint8Array(secret.length + p.length); ikm.set(secret, 0); ikm.set(p, secret.length);
+  }
+  const hk = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey', 'deriveBits']);
+  const zero = new Uint8Array(32);
+  const fileKey = await subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: zero, info: enc.encode(SEND_INFO_KEY) }, hk,
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const access = new Uint8Array(await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: zero, info: enc.encode(SEND_INFO_ACCESS) }, hk, 256));
+  return { fileKey, access: b64url(access) };
+}
+
+/** Prepare a quick send. Returns what to upload/store, and the link secret (goes only in the link). */
+export async function sealSend(data, fileName, password, recipients, iterations = PBKDF2_ITERATIONS, onProgress) {
+  const secret = randomBytes(24);
+  const salt = randomBytes(16);
+  const { fileKey, access } = await sendMaterial(secret, password, salt, iterations);
+  const { ciphertext, sha256 } = await encryptFile(fileKey, data, onProgress);
+  const name = await encryptText(fileKey, fileName, 'file name v1');
+  const keys = {};
+  for (const r of recipients) keys[r.id] = await wrapFileKey(fileKey, r.id, r.publicJwk);
+  return { ciphertext, sha256, name, keys, secret: b64url(secret), salt: toB64(salt), iterations,
+    accessHash: await sha256Hex(enc.encode(access)) };
+}
+
+/** Recipient side: the access value to show the server. */
+export async function sendAccess(secretB64url, password, saltB64, iterations) {
+  return (await sendMaterial(fromB64url(secretB64url), password, fromB64(saltB64), iterations)).access;
+}
+
+/** Recipient side: decrypt the downloaded file. */
+export async function openSend(secretB64url, password, saltB64, iterations, sealed, onProgress) {
+  const { fileKey } = await sendMaterial(fromB64url(secretB64url), password, fromB64(saltB64), iterations);
+  const fileName = await decryptText(fileKey, sealed.name, 'file name v1');
+  const { data, sha256 } = await decryptFile(fileKey, sealed.ciphertext, onProgress);
+  if (sealed.sha256 && sha256 !== sealed.sha256) throw new Error('Fingerprint does not match.');
+  return { data, fileName, sha256 };
+}

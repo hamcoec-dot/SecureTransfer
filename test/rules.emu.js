@@ -105,3 +105,12 @@ test('nobody reads storage objects directly', async () => {
   await assertFails(getBytes(ref(st('up'), 'folders/f1/up/file7')));
   await assertFails(getBytes(ref(st('admin1', { admin: true }), 'folders/f1/up/file7')));
 });
+
+test('quick sends: only administrators upload, nobody reads directly, records are admin-only', async () => {
+  await assertSucceeds(uploadBytes(ref(st('admin1', { admin: true }), 'sends/admin1/s1'), bytes, octet));
+  await assertFails(uploadBytes(ref(st('dl'), 'sends/dl/s2'), bytes, octet));
+  await assertFails(uploadBytes(ref(st('admin1', { admin: true }), 'sends/other/s3'), bytes, octet));
+  await assertFails(getBytes(ref(st('admin1', { admin: true }), 'sends/admin1/s1')));
+  await assertFails(getDoc(doc(user('dl'), 'sends/x')));
+  await assertSucceeds(getDoc(doc(user('admin1', { admin: true }), 'sends/x')));
+});

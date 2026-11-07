@@ -77,3 +77,29 @@ test('public key fingerprints are stable and readable', async () => {
   assert.match(f, /^[0-9a-f]{4}( [0-9a-f]{4}){4}$/);
   assert.equal(f, await c.publicKeyFingerprint({ ...publicJwk }));
 });
+
+test('quick send: link + password open it; wrong password or link fails; access hash matches', async () => {
+  const rec = await c.generateKeyPair();
+  const data = new TextEncoder().encode('one file, one time');
+  const s = await c.sealSend(data, 'Notice.txt', 'river terminal 700', [{ id: 'recovery', publicJwk: rec.publicJwk }], FAST);
+  const access = await c.sendAccess(s.secret, 'river terminal 700', s.salt, s.iterations);
+  assert.equal(await c.sha256Hex(new TextEncoder().encode(access)), s.accessHash);
+  const wrongAccess = await c.sendAccess(s.secret, 'wrong', s.salt, s.iterations);
+  assert.notEqual(await c.sha256Hex(new TextEncoder().encode(wrongAccess)), s.accessHash);
+  const out = await c.openSend(s.secret, 'river terminal 700', s.salt, s.iterations, s);
+  assert.equal(out.fileName, 'Notice.txt');
+  assert.deepEqual(out.data, data);
+  await assert.rejects(c.openSend(s.secret, 'wrong', s.salt, s.iterations, s));
+  const other = c.b64url(crypto.getRandomValues(new Uint8Array(24)));
+  await assert.rejects(c.openSend(other, 'river terminal 700', s.salt, s.iterations, s));
+  // The commission can still open it with the recovery key.
+  const viaRecovery = await c.openFile(s, 'recovery', rec.privateKey);
+  assert.equal(viaRecovery.fileName, 'Notice.txt');
+});
+
+test('quick send without a password works from the link alone', async () => {
+  const rec = await c.generateKeyPair();
+  const s = await c.sealSend(new Uint8Array([9, 9]), 'a.csv', '', [{ id: 'recovery', publicJwk: rec.publicJwk }], FAST);
+  const out = await c.openSend(s.secret, '', s.salt, s.iterations, s);
+  assert.deepEqual(out.data, new Uint8Array([9, 9]));
+});

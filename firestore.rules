@@ -59,6 +59,11 @@ service cloud.firestore {
       }
     }
 
+    match /sends/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /audit/{id} {
       allow read: if isAdmin();
       allow write: if false;
