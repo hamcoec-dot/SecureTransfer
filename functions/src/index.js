@@ -45,6 +45,17 @@ async function audit(action, details, req) {
 }
 
 // ---------------------------------------------------------------- helpers
+const EMULATED = process.env.FUNCTIONS_EMULATOR === 'true';
+/** A 5-minute read link. On the emulators (no signing key) the emulator's download URL stands in. */
+async function readUrl(path) {
+  if (EMULATED) {
+    const host = process.env.FIREBASE_STORAGE_EMULATOR_HOST || '127.0.0.1:9199';
+    return `http://${host}/download/storage/v1/b/${bucket().name}/o/${encodeURIComponent(path)}?alt=media`;
+  }
+  const [url] = await bucket().file(path).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 5 * 60e3 });
+  return url;
+}
+
 function requireUser(req) {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Please sign in.');
   const t = req.auth.token;
@@ -397,7 +408,7 @@ export const getDownload = onCall(callOpts, async (req) => {
     tx.update(ref, patch);
     return f;
   });
-  const [url] = await bucket().file(file.path).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 5 * 60e3 });
+  const url = await readUrl(file.path);
   await audit('file.download', { folder: fid, file: fileId }, req);
   if (file.uploadedBy !== u.uid) {
     const to = await userEmail(file.uploadedBy);
@@ -516,7 +527,7 @@ export const dropoffStart = onCall(callOpts, async (req) => {
   out.push({ id: 'recovery', publicJwk: rec.data().jwk });
   const fileId = L.newId(15);
   const path = `folders/${d.folder}/dropoff/${fileId}`;
-  const [url] = await bucket().file(path).getSignedUrl({
+  const [url] = EMULATED ? [`emulator:${path}`] : await bucket().file(path).getSignedUrl({
     version: 'v4', action: 'write', expires: Date.now() + 30 * 60e3, contentType: 'application/octet-stream',
     extensionHeaders: { 'x-goog-content-length-range': `0,${L.MAX_FILE_BYTES + 1e6}` },
   });
@@ -604,7 +615,7 @@ export const sendOpen = onCall(callOpts, async (req) => {
   const patch = { downloads: FieldValue.increment(1), lastDownloadAt: Date.now() };
   if (after >= d.maxDownloads) patch.expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60e3); // removed by cleanup
   await ref.update(patch);
-  const [url] = await bucket().file(d.path).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 5 * 60e3 });
+  const url = await readUrl(d.path);
   await audit('send.download', { file: ref.id, actor: 'link', note: `${after} of ${d.maxDownloads}` }, req);
   await notify(d.creatorEmail, 'Secure Transfer: your quick send was downloaded',
     `Your quick send${d.label ? ` "${d.label}"` : ''} was downloaded (${after} of ${d.maxDownloads}) on ` +

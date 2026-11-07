@@ -34,3 +34,5 @@ jobs:
         working-directory: functions
       - name: Security rules tests (emulators)
         run: npm run test:rules
+      - name: End-to-end flows through the functions (emulators)
+        run: npm run test:flows
