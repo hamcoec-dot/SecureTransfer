@@ -296,6 +296,11 @@ let idleT;
 function bumpIdle() { clearTimeout(idleT); if (S.user) idleT = setTimeout(() => signOutNow('Signed out after 30 minutes without activity.'), IDLE_MINUTES * 60e3); }
 ['pointerdown', 'keydown', 'scroll'].forEach((ev) => addEventListener(ev, bumpIdle, { passive: true }));
 
+// The skip link must not touch the address: routes and Quick send secrets live in the fragment.
+document.getElementById('skip')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  [...document.querySelectorAll('main')].find((m) => m.offsetParent !== null)?.focus();
+});
 const isPublicLink = () => location.hash.startsWith('#dropoff-') || location.hash.startsWith('#send-');
 function showPublicLink() { return location.hash.startsWith('#send-') ? showSendPage() : showDropoff(); }
 onAuthStateChanged(auth, async (user) => {
@@ -455,7 +460,7 @@ async function viewOverview() {
     ${S.admin ? `<div class="actions"><button class="btn" data-act="request"><svg class="icon"><use href="#i-inbox"/></svg>Request files</button>
     <button class="btn primary" data-act="newfolder"><svg class="icon"><use href="#i-plus"/></svg>New shared folder</button></div>` : ''}</div>
     <div class="cards">${list.map((f) => `<a class="fcard" href="#folder-${f.id}"><div style="display:flex;gap:10px;align-items:center">
-      <svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-${f.kind === 'folder' ? 'folder' : 'inbox'}"/></svg><h3>${esc(f.name)}</h3></div>
+      <svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-${f.kind === 'folder' ? 'folder' : 'inbox'}"/></svg><h2>${esc(f.name)}</h2></div>
       <div class="row"><span>${f.kind === 'request' ? 'File request' : f.kind === 'dropoff' ? 'Drop-off' : PERM_TEXT[f.perm]}</span><span>${S.admin ? (f.members?.length || 0) + ' people' : ''}</span></div>
       <div class="facts"><span class="chip"><svg class="icon"><use href="#i-clock"/></svg>Deletes after ${f.days} days</span></div></a>`).join('')}</div>${secureNote()}`;
 }

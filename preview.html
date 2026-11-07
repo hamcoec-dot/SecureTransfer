@@ -28,7 +28,7 @@
   --rail-fg: #e8edfb;
   --rail-muted: #a9b6dc;
   --rail-active: #24409a;
-  --ok: #15803d;
+  --ok: #166534;
   --ok-bg: #e7f6ec;
   --warn: #a15c07;
   --warn-bg: #fdf3e2;
@@ -46,7 +46,7 @@
     --navy: #8fb0ff; --navy-ink: #c9d7ff; --crimson: #f08a8a; --gold: #f0b25c;
     --bg: #0c1222; --surface: #141c31; --surface-2: #1b2540; --fg: #e6ebf7; --muted: #a3afc9; --border: #2a3657;
     --rail: #0a0f1d; --rail-fg: #e6ebf7; --rail-muted: #8e9bbd; --rail-active: #1e2b52;
-    --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
+    --teal: #5eead4; --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
     --focus: #8fb0ff; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
   }
 }
@@ -54,7 +54,7 @@
   --navy: #8fb0ff; --navy-ink: #c9d7ff; --crimson: #f08a8a; --gold: #f0b25c;
   --bg: #0c1222; --surface: #141c31; --surface-2: #1b2540; --fg: #e6ebf7; --muted: #a3afc9; --border: #2a3657;
   --rail: #0a0f1d; --rail-fg: #e6ebf7; --rail-muted: #8e9bbd; --rail-active: #1e2b52;
-  --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
+  --teal: #5eead4; --ok: #5fd08a; --ok-bg: #12301f; --warn: #f0b25c; --warn-bg: #33250d; --bad: #f08a8a; --bad-bg: #3a1616;
   --focus: #8fb0ff; --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark;
 }
 
@@ -153,7 +153,7 @@ tr:last-child td { border-bottom: 0; }
   font: 700 9.5px/1 var(--font-mono); letter-spacing: .03em; color: var(--surface); background: var(--navy); }
 .ext.csv { background: var(--ok); }
 .ext.pdf { background: var(--crimson); }
-.ext.xlsx { background: #0f766e; }
+.ext.xlsx { background: var(--teal, #0f766e); }
 .fname { font-weight: 600; word-break: break-word; }
 .fmeta { font-size: 12.5px; color: var(--muted); }
 .num { text-align: right; white-space: nowrap; }
@@ -176,7 +176,7 @@ tr:last-child td { border-bottom: 0; }
 .fcard { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 16px;
   display: grid; gap: 10px; cursor: pointer; box-shadow: var(--shadow); color: inherit; }
 .fcard:hover { border-color: var(--navy); }
-.fcard h3 { font-size: 16px; }
+.fcard h2 { font-size: 16px; }
 .fcard .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
 
 /* Activity */
@@ -483,7 +483,7 @@ dialog::backdrop { background: rgba(10, 16, 34, .55); }
         var size = f.files.reduce(function (a, x) { return a + x.size; }, 0);
         var next = f.files.map(function (x) { return expires(f, x); }).sort()[0];
         var l = next ? left(next) : null;
-        return '<a class="fcard" href="#folder-' + f.id + '"><div style="display:flex;gap:10px;align-items:center"><svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-folder"/></svg><h3>' + esc(f.name) + '</h3></div>' +
+        return '<a class="fcard" href="#folder-' + f.id + '"><div style="display:flex;gap:10px;align-items:center"><svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-folder"/></svg><h2>' + esc(f.name) + '</h2></div>' +
           '<div class="row"><span>' + f.files.length + ' files · <span class="mono">' + fmtSize(size) + '</span></span><span>' + f.members.length + ' ' + (f.members.length === 1 ? 'person' : 'people') + '</span></div>' +
           '<div class="facts"><span class="chip"><svg class="icon"><use href="#i-clock"/></svg>Deletes after ' + f.days + ' days</span>' +
           (l ? '<span class="chip ' + l.cls + '">Next: ' + l.txt + '</span>' : '') + '</div></a>';
