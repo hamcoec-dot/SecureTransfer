@@ -74,6 +74,14 @@
       <button class="btn primary" type="submit" style="justify-content:center">Turn on</button>
     </form>
 
+    <form id="f-setpass" class="form" novalidate hidden>
+      <div><h1 style="font-size:20px">Set your password</h1><p class="fine">For <b id="sp-email"></b>. Use at least 12 characters. A short sentence is easy to remember.</p></div>
+      <div class="field"><label for="sp-pass">New password</label><input id="sp-pass" type="password" autocomplete="new-password" minlength="12" required></div>
+      <div class="field"><label for="sp-pass2">Type it again</label><input id="sp-pass2" type="password" autocomplete="new-password" minlength="12" required></div>
+      <p class="field-error" id="err-setpass" role="alert"></p>
+      <button class="btn primary" type="submit" style="justify-content:center">Save password</button>
+    </form>
+
     <div id="f-busy" class="form" hidden><p class="fine" id="busy-text" role="status">Unlocking your files…</p></div>
     <p class="fine">Signed out automatically after 30 minutes without activity.</p>
   </div>

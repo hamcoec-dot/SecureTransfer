@@ -4,6 +4,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/fireba
 import {
   getAuth, connectAuthEmulator, setPersistence, browserSessionPersistence, signInWithEmailAndPassword,
   getMultiFactorResolver, TotpMultiFactorGenerator, multiFactor, sendPasswordResetEmail, signOut, onAuthStateChanged,
+  verifyPasswordResetCode, confirmPasswordReset,
 } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
 import {
   getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, collection, query, where, orderBy, limit, getDocs,
@@ -124,11 +125,49 @@ const daySelect = (name, value, max = 180) => `<select name="${name}" id="${name
 // ---------------------------------------------------------------- sign-in
 let resolver = null, pendingPassword = '', enrollSecret = null;
 function showStep(id) {
-  for (const f of ['#f-pass', '#f-code', '#f-enroll', '#f-busy']) $(f).hidden = f !== id;
+  for (const f of ['#f-pass', '#f-code', '#f-enroll', '#f-busy', '#f-setpass']) $(f).hidden = f !== id;
   $('#step2bar').className = id === '#f-pass' ? '' : 'on';
   $(id).querySelector('input')?.focus();
 }
-function showSignIn() { $('#app').hidden = true; $('#dropoff').hidden = true; $('#signin').hidden = false; showStep('#f-pass'); }
+function showSignIn() {
+  $('#app').hidden = true; $('#dropoff').hidden = true; $('#signin').hidden = false;
+  if (resetCode) return;
+  showStep('#f-pass');
+}
+
+// Password setup and reset links land here (the email's action link points at this page).
+const params = new URLSearchParams(location.search);
+let resetCode = params.get('mode') === 'resetPassword' ? params.get('oobCode') : null;
+async function startSetPassword() {
+  $('#signin').hidden = false; $('#app').hidden = true;
+  try {
+    const email = await verifyPasswordResetCode(auth, resetCode);
+    $('#sp-email').textContent = email;
+    $('#si-email').value = email;
+    showStep('#f-setpass');
+  } catch {
+    resetCode = null;
+    showStep('#f-pass');
+    $('#err-pass').textContent = 'That link has expired or was already used. Type your email and click \u201cForgot your password?\u201d for a new one.';
+  }
+}
+$('#f-setpass').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const a = $('#sp-pass').value, b = $('#sp-pass2').value, err = $('#err-setpass');
+  if (a.length < 12) { err.textContent = 'Use at least 12 characters.'; return; }
+  if (a !== b) { err.textContent = 'The two passwords don\u2019t match.'; return; }
+  try {
+    await confirmPasswordReset(auth, resetCode, a);
+    resetCode = null;
+    history.replaceState(null, '', location.pathname + (params.has('staging') ? '?staging' : ''));
+    $('#sp-pass').value = $('#sp-pass2').value = '';
+    showStep('#f-pass');
+    toast('Password saved. Sign in now.');
+  } catch (ex) {
+    err.textContent = ex.code === 'auth/weak-password' ? 'Pick a longer password.' : errText(ex);
+  }
+});
+if (resetCode) startSetPassword();
 
 $('#f-pass').addEventListener('submit', async (e) => {
   e.preventDefault();
