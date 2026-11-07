@@ -66,8 +66,9 @@ const extOf = (n) => (/\.([a-z0-9]+)$/i.exec(n) || [, ''])[1].toLowerCase();
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 4000); }
 function errText(e) {
-  const m = e?.message || String(e);
-  return m.replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '');
+  const m = (e?.message || String(e)).replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '');
+  // A bare "Error" helps nobody: show the code so a screenshot says what went wrong.
+  return m && m !== 'Error' ? m : `Something went wrong (${e?.code || 'unknown'}). Try again in a minute.`;
 }
 function saveBlob(data, name, type = 'application/octet-stream') {
   const url = URL.createObjectURL(new Blob([data], { type }));
