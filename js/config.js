@@ -12,7 +12,7 @@ const PROD = {
   storageBucket: 'hcec-secure-transfer.firebasestorage.app',
   messagingSenderId: '1086361879095',
   appId: '1:1086361879095:web:7caeddb0dbb3b704dfb5b2',
-  recaptchaKey: '', // App Check (reCAPTCHA Enterprise) site key, set at go-live
+  recaptchaKey: '6LcNSBQuAAAAAGW56J8i_0g36QtBJxAPkkDmWYlJ', // App Check (reCAPTCHA Enterprise) site key
 };
 const STAGING = {
   apiKey: 'AIzaSyDaWSTpxRogZml7MQYc2wqEuWd8Iv_mShY',
@@ -21,7 +21,7 @@ const STAGING = {
   storageBucket: 'hcec-secure-transfer-staging.firebasestorage.app',
   messagingSenderId: '603603538978',
   appId: '1:603603538978:web:02d1a7e4777f270400a67b',
-  recaptchaKey: '',
+  recaptchaKey: '6LeslRQuAAAAAAxDHchp8mbGX95Q3cWQc3w8jkOC',
 };
 const EMULATOR = {
   apiKey: 'demo-key', authDomain: 'demo-secure-transfer.firebaseapp.com', projectId: 'demo-secure-transfer',
