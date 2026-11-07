@@ -55,6 +55,11 @@ done
 # 3c. firebase deploy also needs these APIs on: firebaseextensions, cloudresourcemanager, pubsub, runtimeconfig,
 #     logging, cloudbilling (done 2026-11-07).
 
+# 3d. The org's "Domain restricted sharing" policy blocks allUsers, which callables and the sign-in hooks need
+#     (each function checks sign-in itself). Override it on this project only (needs Org Policy Administrator):
+printf 'constraint: constraints/iam.allowedPolicyMemberDomains\nlistPolicy:\n  allValues: ALLOW\n' > allow.yaml
+gcloud resource-manager org-policies set-policy allow.yaml --project=$P
+
 # 4. Mail for alerts (Secret Manager). "none" turns alerts off until a real account is connected:
 printf none | gcloud secrets create SMTP_URL --project=$P --data-file=-
 gcloud secrets add-iam-policy-binding SMTP_URL --project=$P --member=serviceAccount:$RUNTIME --role=roles/secretmanager.secretAccessor
