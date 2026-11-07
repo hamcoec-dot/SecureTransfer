@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="css/app.css?v=3">
 <script src="js/vendor/qrcode.js" defer></script>
-<script type="module" src="js/app.js?v=6"></script>
+<script type="module" src="js/app.js?v=7"></script>
 </head>
 <body>
 <a class="sr" href="#" id="skip">Skip to main content</a>
@@ -54,6 +54,7 @@
       <div class="field"><label for="si-pass">Password</label><input id="si-pass" type="password" autocomplete="current-password" required></div>
       <p class="field-error" id="err-pass" role="alert"></p>
       <button class="btn primary" type="submit" style="justify-content:center">Continue</button>
+      <button class="btn" type="button" id="pk-signin" style="justify-content:center" hidden><svg class="icon"><use href="#i-lock"/></svg>Sign in with a passkey</button>
       <p class="fine"><button class="linkish" type="button" id="forgot" style="color:var(--navy)">Forgot your password?</button> Accounts are by invitation only.</p>
     </form>
 
@@ -80,6 +81,15 @@
       <div class="field"><label for="sp-pass2">Type it again</label><input id="sp-pass2" type="password" autocomplete="new-password" minlength="12" required></div>
       <p class="field-error" id="err-setpass" role="alert"></p>
       <button class="btn primary" type="submit" style="justify-content:center">Save password</button>
+    </form>
+
+    <form id="f-unlock" class="form" novalidate hidden>
+      <div><h1 style="font-size:20px">Unlock your files</h1><p class="fine">Your files are encrypted with a key only your password can open. Type it once for this visit.</p></div>
+      <input type="email" id="ul-email" autocomplete="username" hidden>
+      <div class="field"><label for="ul-pass">Password</label><input id="ul-pass" type="password" autocomplete="current-password" required></div>
+      <p class="field-error" id="err-unlock" role="alert"></p>
+      <button class="btn primary" type="submit" style="justify-content:center">Unlock</button>
+      <p class="fine"><button class="linkish" type="button" id="ul-cancel" style="color:var(--navy)">Sign out</button></p>
     </form>
 
     <div id="f-busy" class="form" hidden><p class="fine" id="busy-text" role="status">Unlocking your files…</p></div>
@@ -135,6 +145,10 @@
       <a class="rail-link" href="#people"><svg class="icon"><use href="#i-people"/></svg><span class="t">People</span><span class="n"></span></a>
       <a class="rail-link" href="#activity"><svg class="icon"><use href="#i-log"/></svg><span class="t">Activity log</span><span class="n"></span></a>
       <a class="rail-link" href="#rules"><svg class="icon"><use href="#i-gear"/></svg><span class="t">Settings</span><span class="n"></span></a>
+    </div>
+    <div class="rail-section nav">
+      <div class="rail-label">You</div>
+      <a class="rail-link" href="#account"><svg class="icon"><use href="#i-lock"/></svg><span class="t">Passkeys &amp; account</span><span class="n"></span></a>
     </div>
     <div class="rail-foot">
       <div class="me"><span class="avatar" id="me-initials"></span><div><div style="color:var(--rail-fg);font-weight:600" id="me-name"></div><div id="me-role"></div></div></div>

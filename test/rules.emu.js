@@ -114,3 +114,14 @@ test('quick sends: only administrators upload, nobody reads directly, records ar
   await assertFails(getDoc(doc(user('dl'), 'sends/x')));
   await assertSucceeds(getDoc(doc(user('admin1', { admin: true }), 'sends/x')));
 });
+
+test('a passkey sign-in counts as two factors; other custom tokens and passkey records do not open anything', async () => {
+  const pk = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'custom' }, passkey: true }).firestore();
+  const custom = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'custom' } }).firestore();
+  const forged = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'password' }, passkey: true }).firestore();
+  await assertSucceeds(getDoc(doc(pk('dl'), 'folders/f1')));
+  await assertFails(getDoc(doc(custom('dl'), 'folders/f1')));
+  await assertFails(getDoc(doc(forged('dl'), 'folders/f1')));
+  await assertFails(getDoc(doc(user('admin1', { admin: true }), 'passkeys/x')));
+  await assertFails(getDoc(doc(pk('dl'), 'webauthn/x')));
+});

@@ -4,8 +4,14 @@ rules_version = '2';
 // may create a new object once; objects can never be overwritten.
 service firebase.storage {
   match /b/{bucket}/o {
+    // A passkey sign-in (fingerprint, face or PIN on the device) counts as both factors. Only the passkeyLogin
+    // function can mint such a token.
+    function passkey() {
+      return request.auth.token.firebase.sign_in_provider == 'custom' && request.auth.token.get('passkey', false) == true;
+    }
     function signedIn() {
-      return request.auth != null && request.auth.token.firebase.sign_in_second_factor != null;
+      return request.auth != null
+        && (request.auth.token.firebase.sign_in_second_factor != null || passkey());
     }
     function folder(fid) {
       return firestore.get(/databases/(default)/documents/folders/$(fid)).data;

@@ -4,9 +4,14 @@ rules_version = '2';
 // their own key material. Every rule requires a sign-in that completed the authenticator (TOTP) step.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // A passkey sign-in (fingerprint, face or PIN on the device) counts as both factors. Only the passkeyLogin
+    // function can mint such a token.
+    function passkey() {
+      return request.auth.token.firebase.sign_in_provider == 'custom' && request.auth.token.get('passkey', false) == true;
+    }
     function signedIn() {
       return request.auth != null
-        && request.auth.token.firebase.sign_in_second_factor != null;
+        && (request.auth.token.firebase.sign_in_second_factor != null || passkey());
     }
     function isAdmin() { return signedIn() && request.auth.token.get('admin', false) == true; }
     function member(fid) {

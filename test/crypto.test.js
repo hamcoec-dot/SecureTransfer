@@ -103,3 +103,15 @@ test('quick send without a password works from the link alone', async () => {
   const out = await c.openSend(s.secret, '', s.salt, s.iterations, s);
   assert.deepEqual(out.data, new Uint8Array([9, 9]));
 });
+
+test('a passkey PRF secret unlocks a copy of the private key, and only that one', async () => {
+  const kp = await c.generateKeyPair();
+  const prf = crypto.getRandomValues(new Uint8Array(32));
+  const rec = await c.wrapPrivateKeyWithPrf(kp.privateKey, prf, 'cred-1');
+  const back = await c.unwrapPrivateKeyWithPrf(rec, prf, 'cred-1');
+  const fk = await c.newFileKey();
+  const entry = await c.wrapFileKey(fk, 'u', kp.publicJwk);
+  assert.ok(await c.unwrapFileKey(entry, 'u', back));
+  await assert.rejects(c.unwrapPrivateKeyWithPrf(rec, crypto.getRandomValues(new Uint8Array(32)), 'cred-1'));
+  await assert.rejects(c.unwrapPrivateKeyWithPrf(rec, prf, 'cred-2'));
+});

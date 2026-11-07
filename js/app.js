@@ -4,7 +4,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/fireba
 import {
   getAuth, connectAuthEmulator, setPersistence, browserSessionPersistence, signInWithEmailAndPassword,
   getMultiFactorResolver, TotpMultiFactorGenerator, multiFactor, sendPasswordResetEmail, signOut, onAuthStateChanged,
-  verifyPasswordResetCode, confirmPasswordReset,
+  verifyPasswordResetCode, confirmPasswordReset, signInWithCustomToken,
 } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
 import {
   getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, collection, query, where, orderBy, limit, getDocs,
@@ -34,7 +34,8 @@ const call = (name) => async (data) => (await httpsCallable(fns, name, { timeout
 const api = Object.fromEntries(['recordSignIn', 'invite', 'updateMember', 'removeUser', 'approveReset', 'replaceKey',
   'listFolders', 'createFolder', 'updateFolder', 'deleteFolder', 'recipients', 'finalizeUpload', 'getDownload', 'deleteFile',
   'addFileKeys', 'postMessage', 'openThread', 'createDropoff', 'dropoffStart', 'dropoffFinish', 'saveSettings',
-  'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus', 'createSend', 'sendInfo', 'sendOpen', 'deleteSend'].map((n) => [n, call(n)]));
+  'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus', 'createSend', 'sendInfo', 'sendOpen', 'deleteSend',
+  'passkeyRegisterOptions', 'passkeyRegister', 'passkeyLoginOptions', 'passkeyLogin', 'passkeyList', 'passkeyDelete'].map((n) => [n, call(n)]));
 
 // ---------------------------------------------------------------- state
 const S = { user: null, admin: false, name: '', privateKey: null, folders: [], files: {}, people: [], route: 'overview', arg: null };
@@ -152,9 +153,9 @@ async function clearKeys() {
 }
 
 // ---------------------------------------------------------------- sign-in
-let resolver = null, pendingPassword = '', enrollSecret = null;
+let resolver = null, pendingPassword = '', enrollSecret = null, pendingPrf = null;
 function showStep(id) {
-  for (const f of ['#f-pass', '#f-code', '#f-enroll', '#f-busy', '#f-setpass']) $(f).hidden = f !== id;
+  for (const f of ['#f-pass', '#f-code', '#f-enroll', '#f-busy', '#f-setpass', '#f-unlock']) $(f).hidden = f !== id;
   $('#step2bar').className = id === '#f-pass' ? '' : 'on';
   $(id).querySelector('input')?.focus();
 }
@@ -308,35 +309,152 @@ onAuthStateChanged(auth, async (user) => {
   if (isPublicLink()) return showPublicLink();
   if (!user) { S.user = null; return showSignIn(); }
   const tok = await user.getIdTokenResult();
-  if (!tok.claims.firebase?.sign_in_second_factor) return; // still in enrollment
+  if (!tok.claims.firebase?.sign_in_second_factor && tok.claims.passkey !== true) return; // still in enrollment
   S.user = user; S.admin = tok.claims.admin === true;
   $('#signin').hidden = false; showStep('#f-busy');
   try {
-    const info = await api.recordSignIn({ deviceId: deviceId(), deviceLabel: deviceLabel() });
-    S.name = info.name || user.email;
-    await unlockKeys(user, info.needsKey);
+    S.info = await api.recordSignIn({ deviceId: deviceId(), deviceLabel: deviceLabel() });
+    S.name = S.info.name || user.email;
+    await unlockKeys(user, S.info.needsKey);
     pendingPassword = '';
-    $('#me-name').textContent = S.name; $('#me-initials').textContent = initials(S.name);
-    $('#me-role').textContent = S.admin ? 'Administrator' : user.email;
-    document.body.classList.toggle('is-admin', S.admin);
-    if (MODE !== 'prod') { $('#env-bar').hidden = false; $('#env-bar').textContent = MODE === 'staging' ? 'Test site: use only test files.' : 'Local emulators.'; }
-    $('#signin').hidden = true; $('#app').hidden = false;
-    bumpIdle();
-    await loadFolders();
-    route();
+    await enterApp(user);
   } catch (err) {
+    if (err.code === 'need-password') {
+      $('#ul-email').value = user.email || ''; $('#err-unlock').textContent = ''; showStep('#f-unlock');
+      return;
+    }
     await signOutNow();
     showSignIn();
     $('#err-pass').textContent = errText(err);
   }
 });
+async function enterApp(user) {
+  $('#me-name').textContent = S.name; $('#me-initials').textContent = initials(S.name);
+  $('#me-role').textContent = S.admin ? 'Administrator' : user.email;
+  document.body.classList.toggle('is-admin', S.admin);
+  if (MODE !== 'prod') { $('#env-bar').hidden = false; $('#env-bar').textContent = MODE === 'staging' ? 'Test site: use only test files.' : 'Local emulators.'; }
+  $('#signin').hidden = true; $('#app').hidden = false;
+  bumpIdle();
+  await loadFolders();
+  route();
+}
+
+// Signed in (passkey, or a reload in a new tab) but the files key isn't unlocked yet: the password unwraps it.
+$('#f-unlock').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pass = $('#ul-pass').value;
+  if (!pass || !S.user) return;
+  $('#err-unlock').textContent = '';
+  try {
+    const snap = await getDoc(doc(db, `privateKeys/${S.user.uid}`));
+    S.privateKey = await C.unwrapPrivateKey(snap.data(), pass);
+    $('#ul-pass').value = '';
+    await cacheKey(S.user.uid, S.privateKey);
+    await enterApp(S.user);
+  } catch (err) {
+    $('#err-unlock').textContent = /Wrong password/.test(err.message) ? 'That password didn’t unlock your files.' : errText(err);
+  }
+});
+$('#ul-cancel').addEventListener('click', () => signOutNow('Signed out.'));
+
+// ---------------------------------------------------------------- passkeys (WebAuthn)
+// The browser, the operating system (Windows Hello, iCloud Keychain, Google Password Manager) or an extension
+// such as Bitwarden holds the passkey. Its PRF output, which never leaves this page, unlocks the files key.
+const fromU = (s) => C.fromB64url(s);
+const toU = (b) => C.b64url(new Uint8Array(b));
+const pkCreate = (o) => ({ ...o, challenge: fromU(o.challenge), user: { ...o.user, id: fromU(o.user.id) },
+  excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: fromU(c.id) })) });
+const pkGet = (o) => ({ ...o, challenge: fromU(o.challenge), allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: fromU(c.id) })) });
+function credJSON(c) {
+  const r = c.response;
+  const out = { id: c.id, rawId: toU(c.rawId), type: c.type, clientExtensionResults: {}, response: { clientDataJSON: toU(r.clientDataJSON) } };
+  if (c.authenticatorAttachment) out.authenticatorAttachment = c.authenticatorAttachment;
+  if (r.attestationObject) { out.response.attestationObject = toU(r.attestationObject); out.response.transports = r.getTransports?.() || []; }
+  if (r.authenticatorData) {
+    out.response.authenticatorData = toU(r.authenticatorData); out.response.signature = toU(r.signature);
+    if (r.userHandle) out.response.userHandle = toU(r.userHandle);
+  }
+  return out;
+}
+const prfOf = (c) => { const x = c?.getClientExtensionResults?.().prf?.results?.first; return x ? new Uint8Array(x) : null; };
+const PRF_EXT = { prf: { eval: { first: C.PASSKEY_PRF_SALT } } };
+if (window.PublicKeyCredential) $('#pk-signin').hidden = false;
+
+$('#pk-signin').addEventListener('click', async () => {
+  $('#err-pass').textContent = '';
+  try {
+    const { id, options } = await api.passkeyLoginOptions({});
+    const cred = await navigator.credentials.get({ publicKey: { ...pkGet(options), extensions: PRF_EXT } });
+    if (!cred) return;
+    showStep('#f-busy'); $('#busy-text').textContent = 'Signing in…';
+    const r = await api.passkeyLogin({ id, response: credJSON(cred) });
+    const prf = prfOf(cred);
+    pendingPrf = r.privateKey && prf ? { record: r.privateKey, prf, credentialId: r.credentialId } : null;
+    await signInWithCustomToken(auth, r.token);
+  } catch (err) {
+    showStep('#f-pass');
+    $('#err-pass').textContent = err.name === 'NotAllowedError' ? 'The passkey request was cancelled or timed out.' : errText(err);
+  }
+});
+
+async function addPasskey() {
+  if (!window.PublicKeyCredential) { toast('This browser can’t use passkeys.'); return; }
+  const r = await dialog({ title: 'Add a passkey', ok: 'Continue',
+    sub: 'Your device will ask for your fingerprint, face or PIN, or your passkey manager (such as Bitwarden) will offer to save it. To let it unlock your files too, confirm your password first.',
+    body: `<div class="field"><label for="pk-label">Name for this passkey</label><input name="label" id="pk-label" maxlength="60" required value="${esc(deviceLabel().split(' on ')[1] || 'My passkey')}"></div>
+      <input type="email" autocomplete="username" value="${esc(S.user.email)}" hidden>
+      <div class="field"><label for="pk-pass">Your password</label><input name="password" id="pk-pass" type="password" autocomplete="current-password" required></div>` });
+  if (!r) return;
+  let key;
+  try { key = await C.unwrapPrivateKey((await getDoc(doc(db, `privateKeys/${S.user.uid}`))).data(), r.password, true); }
+  catch { toast('That password isn’t right.'); return; }
+  const { id, options } = await api.passkeyRegisterOptions({});
+  let cred;
+  try { cred = await navigator.credentials.create({ publicKey: { ...pkCreate(options), extensions: { credProps: true, ...PRF_EXT } } }); }
+  catch (err) { toast(err.name === 'InvalidStateError' ? 'This device already has a passkey for your account.' : err.name === 'NotAllowedError' ? 'Cancelled.' : errText(err)); return; }
+  let prf = prfOf(cred);
+  if (!prf && cred.getClientExtensionResults?.().prf?.enabled) {
+    // Some passkeys only produce the unlock secret when used, not when made: one more touch.
+    toast('One more time, so this passkey can unlock your files.');
+    try {
+      const a = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: options.rp.id,
+        allowCredentials: [{ type: 'public-key', id: cred.rawId }], userVerification: 'required', extensions: PRF_EXT } });
+      prf = prfOf(a);
+    } catch { /* still works for sign-in; files then ask for the password */ }
+  }
+  const privateKey = prf ? await C.wrapPrivateKeyWithPrf(key, prf, cred.id) : null;
+  const res = await api.passkeyRegister({ id, response: credJSON(cred), label: r.label, privateKey });
+  toast(res.unlocks ? 'Passkey added. It signs you in and unlocks your files.' : 'Passkey added. After signing in with it, you’ll type your password once to unlock files.');
+  await render(true);
+}
+
+async function viewAccount() {
+  const { passkeys } = await api.passkeyList({});
+  return `<div class="head"><div><div class="eyebrow">Your account</div><h1>Passkeys &amp; account</h1>
+    <p>A passkey signs you in with your fingerprint, face or device PIN instead of your password and code. It can live in Windows Hello, your iPhone or Mac,
+    your Android phone, or a password manager such as Bitwarden. Your password and authenticator code keep working as a backup.</p></div>
+    <div class="actions"><button class="btn primary" data-act="pkadd"><svg class="icon"><use href="#i-plus"/></svg>Add a passkey</button></div></div>
+    <div class="panel"><div class="panel-h"><h2>Your passkeys</h2></div>${passkeys.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Added</th><th>Last used</th><th>Files</th><th><span class="sr">Actions</span></th></tr></thead><tbody>
+      ${passkeys.map((k) => `<tr><td class="fname">${esc(k.label)}</td><td>${fmtDate(k.createdAt)}</td><td>${k.lastUsed ? fmtWhen(k.lastUsed) : '<span class="fine">Not yet</span>'}</td>
+        <td>${k.unlocks ? '<span class="chip ok">Unlocks files</span>' : '<span class="chip">Asks for password</span>'}</td>
+        <td class="num"><button class="btn small danger" data-act="pkremove" data-id="${esc(k.id)}" aria-label="Remove ${esc(k.label)}">Remove</button></td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">No passkeys yet.</div>'}</div>
+    <div class="panel panel-b secure-note"><svg class="icon" style="color:var(--ok);width:20px;height:20px"><use href="#i-lock"/></svg>
+      <div><b>Signed in as ${esc(S.user.email)}.</b> If you lose a device that holds a passkey, remove it here, or ask the Commission to remove it.</div></div>`;
+}
 
 /** Make or unlock this person's key pair with the password they just typed. */
 async function unlockKeys(user, needsKey) {
   if (!pendingPassword) {
     const k = needsKey ? null : await cachedKey(user.uid);
     if (k) { S.privateKey = k; return; }
-    throw new Error('Please sign in again to unlock your files.');
+    if (pendingPrf && !needsKey) {
+      const p = pendingPrf; pendingPrf = null;
+      try { S.privateKey = await C.unwrapPrivateKeyWithPrf(p.record, p.prf, p.credentialId); await cacheKey(user.uid, S.privateKey); return; }
+      catch { /* fall back to the password */ }
+    }
+    if (needsKey) throw new Error('Sign in with your password the first time.');
+    throw Object.assign(new Error('Enter your password to unlock your files.'), { code: 'need-password' });
   }
   $('#busy-text').textContent = 'Unlocking your files…';
   const privRef = doc(db, `privateKeys/${user.uid}`);
@@ -429,6 +547,7 @@ async function route() {
   const m = /^folder-([\w-]+)$/.exec(h);
   if (m) { S.route = 'folder'; S.arg = m[1]; }
   else if (S.admin && ['sends', 'requests', 'people', 'activity', 'rules'].includes(h)) { S.route = h; S.arg = null; }
+  else if (h === 'account') { S.route = h; S.arg = null; }
   else { S.route = 'overview'; S.arg = null; }
   await render();
 }
@@ -437,7 +556,7 @@ addEventListener('hashchange', () => { if (isPublicLink()) showPublicLink(); els
 async function render(keepFocus) {
   const v = $('#view');
   try {
-    const html = await ({ sends: viewSends, overview: viewOverview, folder: () => viewFolder(S.arg), requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules }[S.route])();
+    const html = await ({ sends: viewSends, overview: viewOverview, folder: () => viewFolder(S.arg), requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules, account: viewAccount }[S.route])();
     v.innerHTML = html;
   } catch (err) {
     v.innerHTML = `<div class="panel panel-b">Couldn’t load this page: ${esc(errText(err))}</div>`;
@@ -450,7 +569,7 @@ async function render(keepFocus) {
 // ---------------------------------------------------------------- views
 const secureNote = () => `<div class="panel panel-b secure-note"><svg class="icon" style="color:var(--ok);width:20px;height:20px"><use href="#i-lock"/></svg>
   <div><b>How files are protected.</b> Files and their names are encrypted in your browser before they leave your computer, and stay encrypted in storage.
-  Everyone signs in with a password and a code from an authenticator app. Every upload, download and change is recorded.</div></div>`;
+  Everyone signs in with a password and a code from an authenticator app, or with a passkey. Every upload, download and change is recorded.</div></div>`;
 
 async function viewOverview() {
   const list = S.folders.filter((f) => f.kind !== 'thread');
@@ -639,6 +758,7 @@ async function viewPeople() {
         <td class="num"><div class="actions" style="justify-content:flex-end">
         ${!p.admin ? `<button class="btn small" data-act="message" data-uid="${p.uid}">Message</button>` : ''}
         ${p.noSelfReset ? `<button class="btn small" data-act="approvereset" data-uid="${p.uid}">Approve reset</button>` : ''}
+        <button class="btn small" data-act="pkremoveall" data-uid="${p.uid}">Remove passkeys</button>
         ${!p.admin ? `<button class="btn small danger" data-act="removeuser" data-uid="${p.uid}">Remove</button>` : ''}</div></td></tr>`;
     }).join('')}</tbody></table></div></div>`;
 }
@@ -650,7 +770,7 @@ async function viewActivity() {
     <p>Every sign-in, upload, download, permission change and automatic deletion. Each entry is chained to the one before, so a changed or removed entry is detected.</p></div>
     <div class="actions"><button class="btn" data-act="verifylog">Check the log</button><button class="btn" data-act="export"><svg class="icon"><use href="#i-down"/></svg>Export CSV</button></div></div>
     <div class="panel log">${rows.map(({ entry: e, seq }) => `<div class="log-row"><time>${fmtWhen(e.at)}</time><div class="what">
-      <b${/bad|blocked/.test(e.action) ? ' style="color:var(--bad)"' : ''}>${esc(e.actorEmail || e.actor)}</b> ${esc(describe(e))}
+      <b${/bad|blocked|failed/.test(e.action) ? ' style="color:var(--bad)"' : ''}>${esc(e.actorEmail || e.actor)}</b> ${esc(describe(e))}
       <div class="ip mono">#${seq}${e.ip ? ' · ' + esc(e.ip) : ''}</div></div></div>`).join('') || '<div class="empty">Nothing yet.</div>'}</div>`;
 }
 function describe(e) {
@@ -664,6 +784,7 @@ function describe(e) {
     'message.post': `sent a message${where}`, 'dropoff.create': 'made a drop-off link', 'dropoff.upload': `sent a file by drop-off${where}`, 'dropoff.bad-code': 'entered a wrong drop-off code',
     cleanup: 'automatic deletion', 'settings.change': 'changed settings', 'recovery.set': 'set up the recovery key', 'log.export': 'exported the log',
     'key.replace': 'set up a new encryption key', 'user.reset-approved': `approved a password reset for ${e.target}`, 'thread.open': `started private messages with ${e.target}`,
+    'passkey.add': 'added a passkey', 'passkey.remove': `removed passkeys for ${e.target}`, 'passkey.signin': 'signed in with a passkey', 'passkey.failed': 'failed a passkey sign-in',
   }[e.action] || e.action;
   return t + (e.note && !['file.share'].includes(e.action) ? ` (${e.note})` : '');
 }
@@ -835,6 +956,14 @@ document.addEventListener('click', async (e) => {
       if (!ok) return;
       await api.updateMember({ folder: f.id, uid: b.dataset.uid, remove: true });
       await loadFolders(); await render(true); toast('Removed.');
+    } else if (act === 'pkadd') {
+      await addPasskey();
+    } else if (act === 'pkremove') {
+      if (!await dialog({ title: 'Remove this passkey?', sub: 'It will no longer sign you in. You may also want to delete it from the device or password manager that holds it.', ok: 'Remove', danger: true })) return;
+      await api.passkeyDelete({ id: b.dataset.id }); await render(true); toast('Passkey removed.');
+    } else if (act === 'pkremoveall') {
+      if (!await dialog({ title: 'Remove all of their passkeys?', sub: 'Use this when someone loses a device. They can still sign in with their password and authenticator code.', ok: 'Remove passkeys', danger: true })) return;
+      const r = await api.passkeyDelete({ uid: b.dataset.uid, all: true }); toast(`${r.removed} passkey${r.removed === 1 ? '' : 's'} removed.`);
     } else if (act === 'removeuser') {
       const ok = await dialog({ title: 'Remove this person everywhere?', sub: 'They are signed out of every device and lose access to all folders.', ok: 'Remove', danger: true });
       if (!ok) return;

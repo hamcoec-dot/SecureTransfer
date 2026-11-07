@@ -6,6 +6,7 @@ import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { getAuth } from 'firebase-admin/auth';
 import * as C from '../../js/crypto.js';
+import { softPasskey } from './webauthn-soft.js';
 
 const PROJECT = 'demo-secure-transfer';
 process.env.GCLOUD_PROJECT = PROJECT;
@@ -26,9 +27,9 @@ function token(uid, { admin = false, mfa = true, email = `${uid}@example.gov` } 
     firebase: { sign_in_provider: 'password', ...(mfa ? { sign_in_second_factor: 'totp' } : {}) },
   })}.`;
 }
-async function call(name, data, who) {
+async function call(name, data, who, headers = {}) {
   const res = await fetch(`http://127.0.0.1:5001/${PROJECT}/us-east1/${name}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...(who ? { Authorization: `Bearer ${who}` } : {}) },
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...(who ? { Authorization: `Bearer ${who}` } : {}), ...headers },
     body: JSON.stringify({ data }),
   });
   const body = await res.json();
@@ -64,6 +65,7 @@ async function download(fid, fileId, uid, who) {
 
 let fid, bobUid, carolUid, BOB, CAROL;
 before(async () => {
+  await getAuth().createUser({ uid: 'admin1', email: 'nate@example.gov' });
   await seedUser('admin1', true);
   K.recovery = await C.generateKeyPair();
   await db.doc('settings/recovery').set({ jwk: K.recovery.publicJwk, setAt: Date.now() });
@@ -173,6 +175,13 @@ test('automatic deletion removes expired files, sends and memberships', async ()
   assert.equal((await db.doc(`folders/${fid}`).get()).data().members[carolUid], undefined);
 });
 
+test('administrators are never removed: not for being unused, not from the People page', async () => {
+  await db.doc('users/admin1').update({ lastSignIn: Date.now() - 400 * 864e5, createdAt: Date.now() - 400 * 864e5 });
+  await runCleanup(Date.now());
+  assert.equal((await db.doc('users/admin1').get()).data().removed, false);
+  await rejects(call('removeUser', { uid: 'admin1' }, ADMIN), 'FAILED_PRECONDITION');
+});
+
 test('activity log: everything recorded, chain intact, tampering detected', async () => {
   const v = await call('verifyLog', {}, ADMIN);
   assert.equal(v.ok, true, JSON.stringify(v));
@@ -186,4 +195,44 @@ test('activity log: everything recorded, chain intact, tampering detected', asyn
   await first.ref.update({ 'entry.note': 'edited by someone' });
   const bad = await call('verifyLog', {}, ADMIN);
   assert.equal(bad.ok, false); assert.equal(bad.seq, 3); assert.equal(bad.reason, 'entry changed');
+});
+
+test('passkeys: add, sign in (unlocking files), reject a stranger\u2019s, remove', async () => {
+  const site = { Origin: 'http://localhost:8000' };
+  const pk = softPasskey('http://localhost:8000', 'localhost');
+  await rejects(call('passkeyRegisterOptions', {}, ADMIN, { Origin: 'https://evil.example' }), 'FAILED_PRECONDITION');
+  const reg = await call('passkeyRegisterOptions', {}, ADMIN, site);
+  assert.equal(reg.options.rp.id, 'localhost');
+  assert.equal(reg.options.authenticatorSelection.userVerification, 'required');
+  const prf = crypto.getRandomValues(new Uint8Array(32));
+  const extractable = await C.generateKeyPair();
+  const wrapped = await C.wrapPrivateKeyWithPrf(extractable.privateKey, prf, pk.id);
+  const done = await call('passkeyRegister', { id: reg.id, response: pk.register(reg.options), label: 'Test key', privateKey: wrapped }, ADMIN, site);
+  assert.equal(done.unlocks, true);
+  await rejects(call('passkeyRegister', { id: reg.id, response: pk.register(reg.options) }, ADMIN, site), 'DEADLINE_EXCEEDED'); // challenge used once
+
+  const opts = await call('passkeyLoginOptions', {}, null, site);
+  const r = await call('passkeyLogin', { id: opts.id, response: pk.login(opts.options) }, null, site);
+  assert.equal(r.credentialId, pk.id);
+  const key = await C.unwrapPrivateKeyWithPrf(r.privateKey, prf, r.credentialId);
+  assert.equal(key.type, 'private');
+  // The custom token signs in, and the resulting session passes the two-factor check.
+  const s = await (await fetch(`http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: r.token, returnSecureToken: true }) })).json();
+  assert.ok(s.idToken, JSON.stringify(s));
+  const listed = await call('passkeyList', {}, s.idToken);
+  assert.equal(listed.passkeys.length, 1); assert.ok(listed.passkeys[0].lastUsed > 0);
+
+  // A replayed sign-in, a passkey nobody registered, and a wrong origin all fail.
+  const again = await call('passkeyLoginOptions', {}, null, site);
+  await rejects(call('passkeyLogin', { id: opts.id, response: pk.login(again.options) }, null, site), 'DEADLINE_EXCEEDED');
+  const stranger = softPasskey('http://localhost:8000', 'localhost');
+  await rejects(call('passkeyLogin', { id: again.id, response: stranger.login(again.options) }, null, site), 'PERMISSION_DENIED');
+  const o3 = await call('passkeyLoginOptions', {}, null, site);
+  await rejects(call('passkeyLogin', { id: o3.id, response: pk.login(o3.options, { asOrigin: 'https://evil.example' }) }, null, site), 'PERMISSION_DENIED');
+
+  // Removing works, and the passkey then no longer signs in.
+  await call('passkeyDelete', { uid: 'admin1', all: true }, ADMIN);
+  const o4 = await call('passkeyLoginOptions', {}, null, site);
+  await rejects(call('passkeyLogin', { id: o4.id, response: pk.login(o4.options) }, null, site), 'PERMISSION_DENIED');
 });

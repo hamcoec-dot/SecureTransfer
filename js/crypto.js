@@ -86,6 +86,31 @@ export async function unwrapPrivateKey(record, password, extractable = false) {
   return subtle.importKey('pkcs8', pkcs8, ECDH, extractable, ['deriveBits']);
 }
 
+// ---------- passkeys: unlocking the private key without the password ----------
+// A passkey's PRF extension gives the browser a secret that only that passkey can reproduce. A copy of the
+// private key is wrapped under a key derived from it, so signing in with the passkey also unlocks files.
+export const PASSKEY_PRF_SALT = enc.encode('HCEC Secure Transfer passkey PRF v1');
+async function prfKey(prfOutput, credentialId) {
+  const hk = await subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32),
+    info: enc.encode('HCEC Secure Transfer passkey key v1|' + credentialId) }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+export async function wrapPrivateKeyWithPrf(privateKey, prfOutput, credentialId) {
+  const iv = randomBytes(12);
+  const pkcs8 = await subtle.exportKey('pkcs8', privateKey);
+  const wrapped = await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('private key passkey v1') },
+    await prfKey(prfOutput, credentialId), pkcs8);
+  return { wrapped: toB64(wrapped), iv: toB64(iv), v: 1 };
+}
+export async function unwrapPrivateKeyWithPrf(record, prfOutput, credentialId, extractable = false) {
+  let pkcs8;
+  try {
+    pkcs8 = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(record.iv), additionalData: enc.encode('private key passkey v1') },
+      await prfKey(prfOutput, credentialId), fromB64(record.wrapped));
+  } catch { throw new Error('This passkey could not unlock your files.'); }
+  return subtle.importKey('pkcs8', pkcs8, ECDH, extractable, ['deriveBits']);
+}
+
 // ---------- file keys, wrapped per recipient ----------
 export async function newFileKey() {
   return subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);

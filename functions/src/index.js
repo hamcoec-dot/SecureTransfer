@@ -10,6 +10,7 @@ import { beforeUserCreated, beforeUserSignedIn, HttpsError as IdentityError } fr
 import { setGlobalOptions, logger } from 'firebase-functions/v2';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import * as L from './lib.js';
+import * as WA from '@simplewebauthn/server';
 import { sendMail, mailConfigured, SMTP_URL } from './mail.js';
 
 initializeApp();
@@ -209,9 +210,12 @@ export const updateMember = onCall(callOpts, async (req) => {
 export const removeUser = onCall(callOpts, async (req) => {
   requireAdmin(req);
   const uid = String(req.data?.uid || '');
+  // There must always be an administrator: admin accounts can't be removed from the portal.
+  if ((await db.doc(`users/${uid}`).get()).data()?.admin === true) throw new HttpsError('failed-precondition', 'Administrator accounts can’t be removed here.');
   const folders = await db.collection('folders').where(`members.${uid}.perm`, 'in', L.PERMS).get();
   const batch = db.batch();
   folders.docs.forEach((d) => batch.update(d.ref, { [`members.${uid}`]: FieldValue.delete() }));
+  (await db.collection('passkeys').where('uid', '==', uid).get()).docs.forEach((d) => batch.delete(d.ref));
   batch.set(db.doc(`users/${uid}`), { removed: true, removedAt: Date.now() }, { merge: true });
   await batch.commit();
   await getAuth().revokeRefreshTokens(uid);
@@ -240,6 +244,7 @@ export const replaceKey = onCall(callOpts, async (req) => {
   const ref = db.doc(`publicKeys/${u.uid}`);
   const old = await ref.get();
   if (old.exists) await db.collection(`publicKeys/${u.uid}/history`).add(old.data());
+  for (const d of (await db.collection('passkeys').where('uid', '==', u.uid).get()).docs) await d.ref.update({ privateKey: null });
   await ref.set({ jwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, createdAt: FieldValue.serverTimestamp() });
   await audit('key.replace', { target: u.email }, req);
   // Files they had access to are re-shared with the new key by an administrator (rewrapFor).
@@ -704,12 +709,14 @@ export async function runCleanup(now = Date.now()) {
     for (const [uid, m] of Object.entries(f.data().members || {})) if (ms(m.until) <= now) { patch[`members.${uid}`] = FieldValue.delete(); members++; }
     if (Object.keys(patch).length) await f.ref.update(patch);
   }
+  for (const d of (await db.collection('webauthn').where('expiresAt', '<=', Timestamp.fromMillis(now)).limit(500).get()).docs) await d.ref.delete();
   const s = await settings();
   let users = 0;
   if (s.removeUnusedDays) {
     const cutoff = now - s.removeUnusedDays * L.DAY_MS;
     for (const u of (await db.collection('users').where('removed', '==', false).get()).docs) {
       const x = u.data();
+      // Administrators are never removed for being unused.
       if (!x.admin && Math.max(x.lastSignIn || 0, x.createdAt || 0) < cutoff) {
         await db.doc(`users/${u.id}`).update({ removed: true, removedAt: now, removedWhy: 'unused' });
         await getAuth().updateUser(u.id, { disabled: true }).catch(() => {});
@@ -728,3 +735,139 @@ export const cleanup = onSchedule({ schedule: 'every 60 minutes', timeZone: 'Ame
 });
 
 export const mailStatus = onCall(callOpts, async (req) => { requireAdmin(req); return { configured: mailConfigured() }; });
+
+// ---------------------------------------------------------------- passkeys (WebAuthn)
+// Identity Platform has no passkeys, so the portal runs WebAuthn itself: a verified passkey assertion (which
+// requires the device's fingerprint, face or PIN) earns a Firebase custom token marked passkey:true. The
+// security rules and requireUser treat that as a complete two-factor sign-in.
+const PASSKEY_ORIGINS = { 'https://govotehamiltontn.gov': 'govotehamiltontn.gov', 'http://localhost:8000': 'localhost' };
+const STAGING = (process.env.GCLOUD_PROJECT || '').endsWith('-staging');
+function rpFor(req) {
+  const origin = String(req.rawRequest?.headers?.origin || '');
+  const rpID = PASSKEY_ORIGINS[origin];
+  if (!rpID) throw new HttpsError('failed-precondition', 'Passkeys work only on the Secure Transfer site.');
+  return { origin, rpID };
+}
+async function newChallenge(kind, uid, challenge) {
+  const ref = db.collection('webauthn').doc();
+  await ref.set({ kind, uid: uid || '', challenge, expiresAt: Timestamp.fromMillis(Date.now() + 5 * 60e3) });
+  return ref.id;
+}
+/** Uses a stored challenge exactly once. */
+async function takeChallenge(id, kind, uid) {
+  const ref = db.doc(`webauthn/${String(id || '').slice(0, 40) || 'x'}`);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError('deadline-exceeded', 'That took too long. Try again.');
+    tx.delete(ref);
+    const c = snap.data();
+    if (c.kind !== kind || (uid && c.uid !== uid) || ms(c.expiresAt) < Date.now()) throw new HttpsError('deadline-exceeded', 'That took too long. Try again.');
+    return c.challenge;
+  });
+}
+const b64u = (u8) => Buffer.from(u8).toString('base64url');
+const passkeyRef = (id) => db.doc(`passkeys/${createHash('sha256').update(String(id)).digest('hex')}`);
+
+/** Signed in: options for adding a passkey to this account. */
+export const passkeyRegisterOptions = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const { rpID } = rpFor(req);
+  const user = (await db.doc(`users/${u.uid}`).get()).data() || {};
+  const existing = await db.collection('passkeys').where('uid', '==', u.uid).get();
+  const options = await WA.generateRegistrationOptions({
+    rpName: 'HCEC Secure Transfer' + (STAGING ? ' (test)' : ''), rpID,
+    userID: new TextEncoder().encode(u.uid), userName: u.email + (STAGING ? ' (test site)' : ''),
+    userDisplayName: user.name || u.email, attestationType: 'none', timeout: 120000,
+    excludeCredentials: existing.docs.map((d) => ({ id: d.data().credentialId, transports: d.data().transports || [] })),
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+  });
+  return { id: await newChallenge('register', u.uid, options.challenge), options };
+});
+
+/** Signed in: check the new passkey and store it, with the private key copy it unlocks (if any). */
+export const passkeyRegister = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const { origin, rpID } = rpFor(req);
+  const challenge = await takeChallenge(req.data?.id, 'register', u.uid);
+  let v;
+  try {
+    v = await WA.verifyRegistrationResponse({ response: req.data?.response, expectedChallenge: challenge,
+      expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true });
+  } catch (e) { throw new HttpsError('invalid-argument', 'The passkey could not be checked: ' + e.message); }
+  if (!v.verified) throw new HttpsError('invalid-argument', 'The passkey could not be checked.');
+  const cred = v.registrationInfo.credential;
+  const k = req.data?.privateKey;
+  const privateKey = k && typeof k.wrapped === 'string' && typeof k.iv === 'string' && k.wrapped.length < 2000 ? { wrapped: k.wrapped, iv: k.iv, v: 1 } : null;
+  const label = L.cleanText(req.data?.label, 60) || 'Passkey';
+  await passkeyRef(cred.id).set({
+    uid: u.uid, credentialId: cred.id, publicKey: b64u(cred.publicKey), counter: cred.counter,
+    transports: (cred.transports || []).slice(0, 8), label, createdAt: Date.now(), lastUsed: 0,
+    backedUp: v.registrationInfo.credentialBackedUp === true, privateKey,
+  });
+  await audit('passkey.add', { target: u.email, note: `${label}${privateKey ? ', unlocks files' : ''}` }, req);
+  await notify(u.email, 'Secure Transfer: a passkey was added',
+    `A passkey ("${label}") was added to your Secure Transfer account. If this was not you, contact the Election Commission right away.`);
+  return { ok: true, unlocks: !!privateKey };
+});
+
+/** Anyone: options for signing in with a passkey (the browser offers the passkeys it holds for this site). */
+export const passkeyLoginOptions = onCall(callOpts, async (req) => {
+  const { rpID } = rpFor(req);
+  const options = await WA.generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120000 });
+  return { id: await newChallenge('login', '', options.challenge), options };
+});
+
+/** Anyone: check a passkey sign-in; returns a sign-in token and the private key copy this passkey unlocks. */
+export const passkeyLogin = onCall(callOpts, async (req) => {
+  const { origin, rpID } = rpFor(req);
+  const challenge = await takeChallenge(req.data?.id, 'login');
+  const response = req.data?.response;
+  const ref = passkeyRef(response?.id);
+  const snap = await ref.get();
+  const fail = async (why) => {
+    logger.warn('passkey sign-in failed', why);
+    await audit('passkey.failed', { actor: snap.exists ? snap.data().uid : 'anonymous', note: why }, req);
+    throw new HttpsError('permission-denied', 'That passkey isn’t set up for this site. Sign in with your password and code instead.');
+  };
+  if (!snap.exists) return fail('unknown passkey');
+  const pk = snap.data();
+  let v;
+  try {
+    v = await WA.verifyAuthenticationResponse({ response, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: rpID,
+      credential: { id: pk.credentialId, publicKey: Buffer.from(pk.publicKey, 'base64url'), counter: pk.counter, transports: pk.transports },
+      requireUserVerification: true });
+  } catch (e) { return fail('check failed: ' + e.message); }
+  if (!v.verified) return fail('check failed');
+  const user = await db.doc(`users/${pk.uid}`).get();
+  if (!user.exists || user.data().removed) return fail('account removed');
+  const authUser = await getAuth().getUser(pk.uid).catch(() => null);
+  if (!authUser || authUser.disabled) return fail('account disabled');
+  await ref.update({ counter: v.authenticationInfo.newCounter, lastUsed: Date.now() });
+  await audit('passkey.signin', { actor: pk.uid, actorEmail: authUser.email, note: pk.label }, req);
+  const token = await getAuth().createCustomToken(pk.uid, { passkey: true });
+  return { token, privateKey: pk.privateKey || null, credentialId: pk.credentialId };
+});
+
+/** Signed in: your passkeys; an administrator may ask for anyone's. */
+export const passkeyList = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const uid = u.admin && req.data?.uid ? String(req.data.uid) : u.uid;
+  const q = await db.collection('passkeys').where('uid', '==', uid).get();
+  return { passkeys: q.docs.map((d) => ({ id: d.id, label: d.data().label, createdAt: d.data().createdAt, lastUsed: d.data().lastUsed,
+    unlocks: !!d.data().privateKey, synced: d.data().backedUp })).sort((a, b) => b.createdAt - a.createdAt) };
+});
+
+/** Signed in: remove one of your passkeys, or (administrator) one or all of someone else's. */
+export const passkeyDelete = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const uid = u.admin && req.data?.uid ? String(req.data.uid) : u.uid;
+  const q = await db.collection('passkeys').where('uid', '==', uid).get();
+  const gone = q.docs.filter((d) => req.data?.all === true || d.id === req.data?.id);
+  if (!gone.length) throw new HttpsError('not-found', req.data?.all ? 'They have no passkeys.' : 'That passkey was already removed.');
+  await Promise.all(gone.map((d) => d.ref.delete()));
+  const email = await userEmail(uid);
+  await audit('passkey.remove', { target: email, note: gone.map((d) => d.data().label).join(', ') }, req);
+  if (uid !== u.uid) await notify(email, 'Secure Transfer: your passkeys were removed',
+    'An administrator removed passkeys from your Secure Transfer account. Sign in with your password and authenticator code.');
+  return { removed: gone.length };
+});

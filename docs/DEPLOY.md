@@ -42,7 +42,8 @@ gcloud iam workload-identity-pools providers create-oidc github --project=$P --l
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$P --role=roles/iam.workloadIdentityUser \
   --member="principalSet://iam.googleapis.com/projects/$N/locations/global/workloadIdentityPools/github/attribute.repository/hamcoec-dot/SecureTransfer"
 
-# 3. Functions sign short-lived download links: the runtime account must be able to sign as itself
+# 3. Functions sign short-lived download links and passkey sign-in tokens: the runtime account must be able to sign
+#    as itself (and the IAM Service Account Credentials API must be on)
 RUNTIME=$N-compute@developer.gserviceaccount.com
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME --project=$P \
   --member=serviceAccount:$RUNTIME --role=roles/iam.serviceAccountTokenCreator
