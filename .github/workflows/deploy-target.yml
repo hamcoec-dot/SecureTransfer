@@ -51,3 +51,17 @@ jobs:
               --member=allUsers --role=roles/run.invoker --project="${{ inputs.project }}" --quiet >/dev/null
             echo "invoker: $service"
           done
+      # The sign-in hooks accept calls only at their run.app address, but a deploy can register the older
+      # cloudfunctions.net address with Identity Platform, which breaks every sign-in. Point them back.
+      - name: Point the sign-in hooks at their run.app addresses
+        run: |
+          P="${{ inputs.project }}"
+          create=$(gcloud run services describe blocksignup --region=us-east1 --project="$P" --format='value(status.url)')
+          signin=$(gcloud run services describe checksignin --region=us-east1 --project="$P" --format='value(status.url)')
+          test -n "$create" && test -n "$signin"
+          curl -sf -X PATCH \
+            "https://identitytoolkit.googleapis.com/admin/v2/projects/$P/config?updateMask=blockingFunctions.triggers" \
+            -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "x-goog-user-project: $P" \
+            -H "Content-Type: application/json" \
+            -d "{\"blockingFunctions\":{\"triggers\":{\"beforeCreate\":{\"functionUri\":\"$create\"},\"beforeSignIn\":{\"functionUri\":\"$signin\"}}}}" \
+            | python3 -c 'import json,sys; t=json.load(sys.stdin)["blockingFunctions"]["triggers"]; print({k: v["functionUri"] for k, v in t.items()})'
