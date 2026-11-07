@@ -47,8 +47,17 @@ RUNTIME=$N-compute@developer.gserviceaccount.com
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME --project=$P \
   --member=serviceAccount:$RUNTIME --role=roles/iam.serviceAccountTokenCreator
 
+# 3b. The org policy gives new projects' default compute account no roles. Functions build and run as it:
+for role in roles/cloudbuild.builds.builder roles/logging.logWriter roles/artifactregistry.writer \
+            roles/datastore.user roles/storage.objectAdmin roles/firebaseauth.admin; do
+  gcloud projects add-iam-policy-binding $P --member=serviceAccount:$RUNTIME --role=$role --condition=None
+done
+# 3c. firebase deploy also needs these APIs on: firebaseextensions, cloudresourcemanager, pubsub, runtimeconfig,
+#     logging, cloudbilling (done 2026-11-07).
+
 # 4. Mail for alerts (Secret Manager). "none" turns alerts off until a real account is connected:
 printf none | gcloud secrets create SMTP_URL --project=$P --data-file=-
+gcloud secrets add-iam-policy-binding SMTP_URL --project=$P --member=serviceAccount:$RUNTIME --role=roles/secretmanager.secretAccessor
 #    later: printf 'smtps://USER:APP-PASSWORD@smtp.example.com:465' | gcloud secrets versions add SMTP_URL --data-file=-
 
 # 5. Firestore TTL backstop on file and message records
