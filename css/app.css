@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 /* Layout: app shell. Fixed left rail of folders (collapses to a top bar on phones), main pane with the open
    folder's files and its people side by side. Commission colours from the Results site. */
 :root {
