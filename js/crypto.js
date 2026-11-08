@@ -111,6 +111,22 @@ export async function unwrapPrivateKeyWithPrf(record, prfOutput, credentialId, e
   return subtle.importKey('pkcs8', pkcs8, ECDH, extractable, ['deriveBits']);
 }
 
+// ---------- "remember this computer" for passkey sign-ins ----------
+// For passkeys without PRF: a random AES key that can never leave this browser (non-extractable, kept in
+// IndexedDB) wraps a copy of the private key. A verified passkey sign-in on the same browser then unlocks files.
+export async function sealPrivateKeyForDevice(extractablePrivateKey) {
+  const deviceKey = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const iv = randomBytes(12);
+  const pkcs8 = await subtle.exportKey('pkcs8', extractablePrivateKey);
+  const wrapped = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('private key device v1') }, deviceKey, pkcs8));
+  const privateKey = await subtle.importKey('pkcs8', pkcs8, ECDH, false, ['deriveBits']);
+  return { deviceKey, record: { iv, wrapped }, privateKey };
+}
+export async function openPrivateKeyFromDevice(deviceKey, record) {
+  const pkcs8 = await subtle.decrypt({ name: 'AES-GCM', iv: record.iv, additionalData: enc.encode('private key device v1') }, deviceKey, record.wrapped);
+  return subtle.importKey('pkcs8', pkcs8, ECDH, false, ['deriveBits']);
+}
+
 // ---------- file keys, wrapped per recipient ----------
 export async function newFileKey() {
   return subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);

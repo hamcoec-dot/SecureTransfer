@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="css/app.css?v=3">
 <script src="js/vendor/qrcode.js" defer></script>
-<script type="module" src="js/app.js?v=7"></script>
+<script type="module" src="js/app.js?v=8"></script>
 </head>
 <body>
 <a class="sr" href="#" id="skip">Skip to main content</a>
@@ -84,9 +84,10 @@
     </form>
 
     <form id="f-unlock" class="form" novalidate hidden>
-      <div><h1 style="font-size:20px">Unlock your files</h1><p class="fine">Your files are encrypted with a key only your password can open. Type it once for this visit.</p></div>
+      <div><h1 style="font-size:20px">Unlock your files</h1><p class="fine">Your files are encrypted with a key only your password can open. Type it once here.</p></div>
       <input type="email" id="ul-email" autocomplete="username" hidden>
       <div class="field"><label for="ul-pass">Password</label><input id="ul-pass" type="password" autocomplete="current-password" required></div>
+      <label class="radio" id="ul-remember-row" hidden><input type="checkbox" id="ul-remember" checked><span><b>Remember this computer</b><small>Next time, your passkey alone unlocks your files here. Don’t use on a shared computer.</small></span></label>
       <p class="field-error" id="err-unlock" role="alert"></p>
       <button class="btn primary" type="submit" style="justify-content:center">Unlock</button>
       <p class="fine"><button class="linkish" type="button" id="ul-cancel" style="color:var(--navy)">Sign out</button></p>

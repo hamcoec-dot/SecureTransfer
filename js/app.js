@@ -130,15 +130,33 @@ const daySelect = (name, value, max = 180) => `<select name="${name}" id="${name
 // browser finds no marker and wipes the cached key. Sign-out and idle sign-out wipe it too.
 function idb() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('secure-transfer', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('keys');
+    const r = indexedDB.open('secure-transfer', 2);
+    r.onupgradeneeded = () => { for (const n of ['keys', 'device']) if (!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function idbDo(mode, fn) {
+async function idbDo(mode, fn, store = 'keys') {
   const d = await idb();
-  return new Promise((res, rej) => { const t = d.transaction('keys', mode); const out = fn(t.objectStore('keys')); t.oncomplete = () => res(out.result); t.onerror = () => rej(t.error); });
+  return new Promise((res, rej) => { const t = d.transaction(store, mode); const out = fn(t.objectStore(store)); t.oncomplete = () => res(out.result); t.onerror = () => rej(t.error); });
 }
+// "Remember this computer": survives sign-out, so a passkey sign-in here unlocks files without the password.
+async function rememberDevice(uid, extractableKey) {
+  const { deviceKey, record, privateKey } = await C.sealPrivateKeyForDevice(extractableKey);
+  const jwk = (await getDoc(doc(db, `publicKeys/${uid}`))).data()?.jwk;
+  try { await idbDo('readwrite', (st) => st.put({ deviceKey, record, x: jwk?.x || '' }, uid), 'device'); } catch {}
+  return privateKey;
+}
+async function deviceKeyFor(uid) {
+  try {
+    const e = await idbDo('readonly', (st) => st.get(uid), 'device');
+    if (!e) return null;
+    const jwk = (await getDoc(doc(db, `publicKeys/${uid}`))).data()?.jwk;
+    if (jwk?.x !== e.x) { await forgetDevice(uid); return null; } // the account's key changed since
+    return await C.openPrivateKeyFromDevice(e.deviceKey, e.record);
+  } catch { return null; }
+}
+async function forgetDevice(uid) { try { await idbDo('readwrite', (st) => st.delete(uid), 'device'); } catch {} }
+async function deviceRemembered(uid) { try { return !!(await idbDo('readonly', (st) => st.get(uid), 'device')); } catch { return false; } }
 async function cacheKey(uid, key) {
   try { sessionStorage.setItem('st-tab', uid); await idbDo('readwrite', (st) => st.put(key, uid)); } catch {}
 }
@@ -310,7 +328,7 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) { S.user = null; return showSignIn(); }
   const tok = await user.getIdTokenResult();
   if (!tok.claims.firebase?.sign_in_second_factor && tok.claims.passkey !== true) return; // still in enrollment
-  S.user = user; S.admin = tok.claims.admin === true;
+  S.user = user; S.admin = tok.claims.admin === true; S.viaPasskey = tok.claims.passkey === true;
   $('#signin').hidden = false; showStep('#f-busy');
   try {
     S.info = await api.recordSignIn({ deviceId: deviceId(), deviceLabel: deviceLabel() });
@@ -320,7 +338,8 @@ onAuthStateChanged(auth, async (user) => {
     await enterApp(user);
   } catch (err) {
     if (err.code === 'need-password') {
-      $('#ul-email').value = user.email || ''; $('#err-unlock').textContent = ''; showStep('#f-unlock');
+      $('#ul-email').value = user.email || ''; $('#err-unlock').textContent = '';
+      $('#ul-remember-row').hidden = !S.viaPasskey; showStep('#f-unlock');
       return;
     }
     await signOutNow();
@@ -347,7 +366,11 @@ $('#f-unlock').addEventListener('submit', async (e) => {
   $('#err-unlock').textContent = '';
   try {
     const snap = await getDoc(doc(db, `privateKeys/${S.user.uid}`));
-    S.privateKey = await C.unwrapPrivateKey(snap.data(), pass);
+    if (S.viaPasskey && $('#ul-remember').checked) {
+      S.privateKey = await rememberDevice(S.user.uid, await C.unwrapPrivateKey(snap.data(), pass, true));
+    } else {
+      S.privateKey = await C.unwrapPrivateKey(snap.data(), pass);
+    }
     $('#ul-pass').value = '';
     await cacheKey(S.user.uid, S.privateKey);
     await enterApp(S.user);
@@ -423,8 +446,10 @@ async function addPasskey() {
     } catch { /* still works for sign-in; files then ask for the password */ }
   }
   const privateKey = prf ? await C.wrapPrivateKeyWithPrf(key, prf, cred.id) : null;
+  if (!prf) await rememberDevice(S.user.uid, key); // this computer, at least, won't need the password
   const res = await api.passkeyRegister({ id, response: credJSON(cred), label: r.label, privateKey });
-  toast(res.unlocks ? 'Passkey added. It signs you in and unlocks your files.' : 'Passkey added. After signing in with it, you’ll type your password once to unlock files.');
+  toast(res.unlocks ? 'Passkey added. It signs you in and unlocks your files anywhere.'
+    : 'Passkey added. On this computer it signs you in and unlocks your files. Elsewhere, it asks for your password the first time.');
   await render(true);
 }
 
@@ -436,9 +461,12 @@ async function viewAccount() {
     <div class="actions"><button class="btn primary" data-act="pkadd"><svg class="icon"><use href="#i-plus"/></svg>Add a passkey</button></div></div>
     <div class="panel"><div class="panel-h"><h2>Your passkeys</h2></div>${passkeys.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Added</th><th>Last used</th><th>Files</th><th><span class="sr">Actions</span></th></tr></thead><tbody>
       ${passkeys.map((k) => `<tr><td class="fname">${esc(k.label)}</td><td>${fmtDate(k.createdAt)}</td><td>${k.lastUsed ? fmtWhen(k.lastUsed) : '<span class="fine">Not yet</span>'}</td>
-        <td>${k.unlocks ? '<span class="chip ok">Unlocks files</span>' : '<span class="chip">Asks for password</span>'}</td>
+        <td>${k.unlocks ? '<span class="chip ok">Unlocks files anywhere</span>' : '<span class="chip">Unlocks files on remembered computers</span>'}</td>
         <td class="num"><button class="btn small danger" data-act="pkremove" data-id="${esc(k.id)}" aria-label="Remove ${esc(k.label)}">Remove</button></td></tr>`).join('')}
       </tbody></table></div>` : '<div class="empty">No passkeys yet.</div>'}</div>
+    ${await deviceRemembered(S.user.uid) ? `<div class="panel panel-b secure-note"><svg class="icon" style="color:var(--navy);width:20px;height:20px"><use href="#i-lock"/></svg>
+      <div><b>This computer is remembered.</b> A passkey sign-in here unlocks your files without your password. Forget it on a shared or public computer.
+      <button class="btn small" data-act="forgetdevice">Forget this computer</button></div></div>` : ''}
     <div class="panel panel-b secure-note"><svg class="icon" style="color:var(--ok);width:20px;height:20px"><use href="#i-lock"/></svg>
       <div><b>Signed in as ${esc(S.user.email)}.</b> If you lose a device that holds a passkey, remove it here, or ask the Commission to remove it.</div></div>`;
 }
@@ -452,6 +480,10 @@ async function unlockKeys(user, needsKey) {
       const p = pendingPrf; pendingPrf = null;
       try { S.privateKey = await C.unwrapPrivateKeyWithPrf(p.record, p.prf, p.credentialId); await cacheKey(user.uid, S.privateKey); return; }
       catch { /* fall back to the password */ }
+    }
+    if (S.viaPasskey && !needsKey) {
+      const dk = await deviceKeyFor(user.uid);
+      if (dk) { S.privateKey = dk; await cacheKey(user.uid, dk); return; }
     }
     if (needsKey) throw new Error('Sign in with your password the first time.');
     throw Object.assign(new Error('Enter your password to unlock your files.'), { code: 'need-password' });
@@ -958,6 +990,8 @@ document.addEventListener('click', async (e) => {
       await loadFolders(); await render(true); toast('Removed.');
     } else if (act === 'pkadd') {
       await addPasskey();
+    } else if (act === 'forgetdevice') {
+      await forgetDevice(S.user.uid); await render(true); toast('This computer is forgotten.');
     } else if (act === 'pkremove') {
       if (!await dialog({ title: 'Remove this passkey?', sub: 'It will no longer sign you in. You may also want to delete it from the device or password manager that holds it.', ok: 'Remove', danger: true })) return;
       await api.passkeyDelete({ id: b.dataset.id }); await render(true); toast('Passkey removed.');

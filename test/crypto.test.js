@@ -115,3 +115,14 @@ test('a passkey PRF secret unlocks a copy of the private key, and only that one'
   await assert.rejects(c.unwrapPrivateKeyWithPrf(rec, crypto.getRandomValues(new Uint8Array(32)), 'cred-1'));
   await assert.rejects(c.unwrapPrivateKeyWithPrf(rec, prf, 'cred-2'));
 });
+
+test('a remembered-computer copy of the private key opens files and its device key cannot be exported', async () => {
+  const kp = await c.generateKeyPair();
+  const { deviceKey, record, privateKey } = await c.sealPrivateKeyForDevice(kp.privateKey);
+  assert.equal(deviceKey.extractable, false); assert.equal(privateKey.extractable, false);
+  const back = await c.openPrivateKeyFromDevice(deviceKey, record);
+  const fk = await c.newFileKey();
+  assert.ok(await c.unwrapFileKey(await c.wrapFileKey(fk, 'u', kp.publicJwk), 'u', back));
+  const other = await c.sealPrivateKeyForDevice(kp.privateKey);
+  await assert.rejects(c.openPrivateKeyFromDevice(other.deviceKey, record));
+});
