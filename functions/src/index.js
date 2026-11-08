@@ -19,6 +19,7 @@ const db = getFirestore();
 const bucket = () => getStorage().bucket();
 const callOpts = { enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== 'true', secrets: [SMTP_URL] };
 const PORTAL_URL = 'https://govotehamiltontn.gov/SecureTransfer/';
+const STAGING = (process.env.GCLOUD_PROJECT || '').endsWith('-staging');
 
 // ---------------------------------------------------------------- audit log (hash-chained)
 async function audit(action, details, req) {
@@ -98,6 +99,23 @@ async function notify(to, subject, text) {
   if (!to || (Array.isArray(to) && !to.length)) return;
   try { await sendMail(to, subject, text + `\n\n${PORTAL_URL}\n\nHamilton County Election Commission · Secure Transfer`); }
   catch (e) { logger.warn('mail failed', e.message); }
+}
+/** The "set your password" email, sent by us through the commission's mail account from noreply@ (Identity
+ *  Platform doesn't allow its own templates to be changed). The link opens the portal's own set-password page. */
+async function passwordEmail(email, invited) {
+  if (!mailConfigured()) return false;
+  const link = new URL(await getAuth().generatePasswordResetLink(email));
+  const code = link.searchParams.get('oobCode');
+  const url = `${PORTAL_URL}?${STAGING ? 'staging&' : ''}mode=resetPassword&oobCode=${encodeURIComponent(code)}`;
+  const intro = invited
+    ? 'The Hamilton County Election Commission invited you to Secure Transfer, its secure file portal.'
+    : 'Someone asked to reset the password for your Secure Transfer account.';
+  await sendMail(email, invited ? 'You’re invited to Secure Transfer' : 'Reset your Secure Transfer password',
+    `${intro}\n\nSet your password here (account: ${email}):\n${url}\n\n` +
+    'The link works once and expires in about an hour. If it has expired, open Secure Transfer and click “Forgot your password?” for a new one.' +
+    (invited ? ' After setting your password you will set up an authenticator app.' : ' If you didn’t ask for this, you can ignore this email.') +
+    '\n\nHamilton County Election Commission · Secure Transfer');
+  return true;
 }
 async function userEmail(uid) {
   const s = await db.doc(`users/${uid}`).get();
@@ -185,7 +203,24 @@ export const invite = onCall(callOpts, async (req) => {
   } else {
     await audit('user.invite', { target: email }, req);
   }
-  return { uid: user.uid, created };
+  const emailed = created ? await passwordEmail(email, true).catch((e) => { logger.warn('invite mail failed', e.message); return false; }) : false;
+  return { uid: user.uid, created, emailed };
+});
+
+/** Anyone: "Forgot your password?". Always answers the same way, so it can't be used to find accounts. */
+export const requestPasswordEmail = onCall(callOpts, async (req) => {
+  const email = String(req.data?.email || '').trim().toLowerCase();
+  if (!L.isEmail(email)) return { ok: true };
+  const user = await getAuth().getUserByEmail(email).catch(() => null);
+  if (!user || user.disabled) return { ok: true };
+  const ref = db.doc(`users/${user.uid}`);
+  const snap = await ref.get();
+  if (!snap.exists || snap.data().removed) return { ok: true };
+  if (Date.now() - (snap.data().passwordEmailAt || 0) < 2 * 60e3) return { ok: true }; // one every 2 minutes
+  await ref.update({ passwordEmailAt: Date.now() });
+  await passwordEmail(email, false).catch((e) => logger.warn('reset mail failed', e.message));
+  await audit('password.email', { actor: user.uid, actorEmail: email }, req);
+  return { ok: true };
 });
 
 export const updateMember = onCall(callOpts, async (req) => {
@@ -741,7 +776,6 @@ export const mailStatus = onCall(callOpts, async (req) => { requireAdmin(req); r
 // requires the device's fingerprint, face or PIN) earns a Firebase custom token marked passkey:true. The
 // security rules and requireUser treat that as a complete two-factor sign-in.
 const PASSKEY_ORIGINS = { 'https://govotehamiltontn.gov': 'govotehamiltontn.gov', 'http://localhost:8000': 'localhost' };
-const STAGING = (process.env.GCLOUD_PROJECT || '').endsWith('-staging');
 function rpFor(req) {
   const origin = String(req.rawRequest?.headers?.origin || '');
   const rpID = PASSKEY_ORIGINS[origin];

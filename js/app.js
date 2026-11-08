@@ -3,7 +3,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
 import {
   getAuth, connectAuthEmulator, setPersistence, browserSessionPersistence, signInWithEmailAndPassword,
-  getMultiFactorResolver, TotpMultiFactorGenerator, multiFactor, sendPasswordResetEmail, signOut, onAuthStateChanged,
+  getMultiFactorResolver, TotpMultiFactorGenerator, multiFactor, signOut, onAuthStateChanged,
   verifyPasswordResetCode, confirmPasswordReset, signInWithCustomToken,
 } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
 import {
@@ -35,7 +35,7 @@ const api = Object.fromEntries(['recordSignIn', 'invite', 'updateMember', 'remov
   'listFolders', 'createFolder', 'updateFolder', 'deleteFolder', 'recipients', 'finalizeUpload', 'getDownload', 'deleteFile',
   'addFileKeys', 'postMessage', 'openThread', 'createDropoff', 'dropoffStart', 'dropoffFinish', 'saveSettings',
   'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus', 'createSend', 'sendInfo', 'sendOpen', 'deleteSend',
-  'passkeyRegisterOptions', 'passkeyRegister', 'passkeyLoginOptions', 'passkeyLogin', 'passkeyList', 'passkeyDelete', 'passkeySetUnlock'].map((n) => [n, call(n)]));
+  'passkeyRegisterOptions', 'passkeyRegister', 'passkeyLoginOptions', 'passkeyLogin', 'passkeyList', 'passkeyDelete', 'passkeySetUnlock', 'requestPasswordEmail'].map((n) => [n, call(n)]));
 
 // ---------------------------------------------------------------- state
 const S = { user: null, admin: false, name: '', privateKey: null, folders: [], files: {}, people: [], route: 'overview', arg: null };
@@ -299,7 +299,7 @@ $('#f-enroll').addEventListener('submit', async (e) => {
 $('#forgot').addEventListener('click', async () => {
   const email = $('#si-email').value.trim();
   if (!email) { $('#err-pass').textContent = 'Type your email above first.'; return; }
-  try { await sendPasswordResetEmail(auth, email, { url: PORTAL_URL }); } catch { /* same message either way */ }
+  try { await api.requestPasswordEmail({ email }); } catch { /* same message either way */ }
   $('#err-pass').textContent = '';
   toast('If that address has an account, a reset link is on its way. Files shared before the reset need the Commission to re-share them.');
 });
@@ -824,7 +824,7 @@ function describe(e) {
     'message.post': `sent a message${where}`, 'dropoff.create': 'made a drop-off link', 'dropoff.upload': `sent a file by drop-off${where}`, 'dropoff.bad-code': 'entered a wrong drop-off code',
     cleanup: 'automatic deletion', 'settings.change': 'changed settings', 'recovery.set': 'set up the recovery key', 'log.export': 'exported the log',
     'key.replace': 'set up a new encryption key', 'user.reset-approved': `approved a password reset for ${e.target}`, 'thread.open': `started private messages with ${e.target}`,
-    'passkey.add': 'added a passkey', 'passkey.remove': `removed passkeys for ${e.target}`, 'passkey.signin': 'signed in with a passkey', 'passkey.unlock': 'let a passkey unlock files', 'passkey.failed': 'failed a passkey sign-in',
+    'passkey.add': 'added a passkey', 'passkey.remove': `removed passkeys for ${e.target}`, 'passkey.signin': 'signed in with a passkey', 'passkey.unlock': 'let a passkey unlock files', 'password.email': 'asked for a password email', 'passkey.failed': 'failed a passkey sign-in',
   }[e.action] || e.action;
   return t + (e.note && !['file.share'].includes(e.action) ? ` (${e.note})` : '');
 }
@@ -1067,11 +1067,8 @@ document.addEventListener('click', async (e) => {
 
 async function inviteTo(folder, p) {
   const r = await api.invite({ folder, email: p.email, name: p.name, org: p.org || '', perm: p.perm, days: p.days, noSelfReset: !!p.noSelfReset });
-  if (r.created) {
-    // Firebase Auth sends the "set your password" email; the link verifies their address.
-    await sendPasswordResetEmail(auth, p.email.trim().toLowerCase(), { url: PORTAL_URL });
-    toast(`Invitation sent to ${p.email}.`);
-  } else toast(`${p.email} now has access.`);
+  if (r.created) toast(r.emailed ? `Invitation sent to ${p.email}.` : `Account made for ${p.email}, but the invitation email couldn’t be sent. Check Settings → Email alerts.`);
+  else toast(`${p.email} now has access.`);
 }
 
 async function makeRecoveryKey() {

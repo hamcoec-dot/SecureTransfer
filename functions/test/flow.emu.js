@@ -240,3 +240,9 @@ test('passkeys: add, sign in (unlocking files), reject a stranger\u2019s, remove
   const o4 = await call('passkeyLoginOptions', {}, null, site);
   await rejects(call('passkeyLogin', { id: o4.id, response: pk.login(o4.options) }, null, site), 'PERMISSION_DENIED');
 });
+
+test('forgot password answers the same for real and unknown addresses', async () => {
+  assert.deepEqual(await call('requestPasswordEmail', { email: 'nobody@example.gov' }), { ok: true });
+  assert.deepEqual(await call('requestPasswordEmail', { email: 'nate@example.gov' }), { ok: true });
+  assert.deepEqual(await call('requestPasswordEmail', { email: 'not an email' }), { ok: true });
+});
