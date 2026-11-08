@@ -87,7 +87,7 @@ Full checklist: Claude Doc "Secure Transfer feature checklist". Added to the pha
 - Phase 5: hash-chained (tamper-evident) audit log, download receipts and new-upload emails, new-device
   sign-in alerts, download limits / delete-after-download.
 - Phase 6: installable on phones (web app manifest), WCAG 2.1 AA check, HSTS check on the domain.
-- Phase 7 (after go-live): signature requests on PDFs with a certificate page (who, when, fingerprint).
+- ~~Phase 7: signature requests on PDFs~~ dropped 2026-11-08: most Tennessee government documents need physical signatures.
 - Skipped: billing/payments, password vault, PDF editing.
 
 ## What Nate does
