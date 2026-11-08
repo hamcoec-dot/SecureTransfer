@@ -231,6 +231,10 @@ test('passkeys: add, sign in (unlocking files), reject a stranger\u2019s, remove
   const o3 = await call('passkeyLoginOptions', {}, null, site);
   await rejects(call('passkeyLogin', { id: o3.id, response: pk.login(o3.options, { asOrigin: 'https://evil.example' }) }, null, site), 'PERMISSION_DENIED');
 
+  // A passkey that gave no unlock copy at first can have one added by its owner, and only its owner.
+  await rejects(call('passkeySetUnlock', { credentialId: pk.id, privateKey: wrapped }, BOB), 'NOT_FOUND');
+  await call('passkeySetUnlock', { credentialId: pk.id, privateKey: wrapped }, s.idToken);
+
   // Removing works, and the passkey then no longer signs in.
   await call('passkeyDelete', { uid: 'admin1', all: true }, ADMIN);
   const o4 = await call('passkeyLoginOptions', {}, null, site);

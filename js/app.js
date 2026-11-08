@@ -35,7 +35,7 @@ const api = Object.fromEntries(['recordSignIn', 'invite', 'updateMember', 'remov
   'listFolders', 'createFolder', 'updateFolder', 'deleteFolder', 'recipients', 'finalizeUpload', 'getDownload', 'deleteFile',
   'addFileKeys', 'postMessage', 'openThread', 'createDropoff', 'dropoffStart', 'dropoffFinish', 'saveSettings',
   'setRecoveryKey', 'exportLog', 'verifyLog', 'mailStatus', 'createSend', 'sendInfo', 'sendOpen', 'deleteSend',
-  'passkeyRegisterOptions', 'passkeyRegister', 'passkeyLoginOptions', 'passkeyLogin', 'passkeyList', 'passkeyDelete'].map((n) => [n, call(n)]));
+  'passkeyRegisterOptions', 'passkeyRegister', 'passkeyLoginOptions', 'passkeyLogin', 'passkeyList', 'passkeyDelete', 'passkeySetUnlock'].map((n) => [n, call(n)]));
 
 // ---------------------------------------------------------------- state
 const S = { user: null, admin: false, name: '', privateKey: null, folders: [], files: {}, people: [], route: 'overview', arg: null };
@@ -366,8 +366,16 @@ $('#f-unlock').addEventListener('submit', async (e) => {
   $('#err-unlock').textContent = '';
   try {
     const snap = await getDoc(doc(db, `privateKeys/${S.user.uid}`));
-    if (S.viaPasskey && $('#ul-remember').checked) {
-      S.privateKey = await rememberDevice(S.user.uid, await C.unwrapPrivateKey(snap.data(), pass, true));
+    const upgrade = S.viaPasskey && pendingPrf && !pendingPrf.record ? pendingPrf : null;
+    if (upgrade || (S.viaPasskey && $('#ul-remember').checked)) {
+      const key = await C.unwrapPrivateKey(snap.data(), pass, true);
+      if (upgrade) {
+        // This passkey can unlock files (it gave a PRF secret when used): from now on it does, on any computer.
+        pendingPrf = null;
+        await api.passkeySetUnlock({ credentialId: upgrade.credentialId, privateKey: await C.wrapPrivateKeyWithPrf(key, upgrade.prf, upgrade.credentialId) })
+          .then(() => toast('Your passkey will unlock your files from now on.')).catch(() => {});
+      }
+      S.privateKey = S.viaPasskey && $('#ul-remember').checked ? await rememberDevice(S.user.uid, key) : await C.unwrapPrivateKey(snap.data(), pass);
     } else {
       S.privateKey = await C.unwrapPrivateKey(snap.data(), pass);
     }
@@ -412,7 +420,7 @@ $('#pk-signin').addEventListener('click', async () => {
     showStep('#f-busy'); $('#busy-text').textContent = 'Signing in…';
     const r = await api.passkeyLogin({ id, response: credJSON(cred) });
     const prf = prfOf(cred);
-    pendingPrf = r.privateKey && prf ? { record: r.privateKey, prf, credentialId: r.credentialId } : null;
+    pendingPrf = prf ? { record: r.privateKey, prf, credentialId: r.credentialId } : null;
     await signInWithCustomToken(auth, r.token);
   } catch (err) {
     showStep('#f-pass');
@@ -476,7 +484,7 @@ async function unlockKeys(user, needsKey) {
   if (!pendingPassword) {
     const k = needsKey ? null : await cachedKey(user.uid);
     if (k) { S.privateKey = k; return; }
-    if (pendingPrf && !needsKey) {
+    if (pendingPrf?.record && !needsKey) {
       const p = pendingPrf; pendingPrf = null;
       try { S.privateKey = await C.unwrapPrivateKeyWithPrf(p.record, p.prf, p.credentialId); await cacheKey(user.uid, S.privateKey); return; }
       catch { /* fall back to the password */ }
@@ -816,7 +824,7 @@ function describe(e) {
     'message.post': `sent a message${where}`, 'dropoff.create': 'made a drop-off link', 'dropoff.upload': `sent a file by drop-off${where}`, 'dropoff.bad-code': 'entered a wrong drop-off code',
     cleanup: 'automatic deletion', 'settings.change': 'changed settings', 'recovery.set': 'set up the recovery key', 'log.export': 'exported the log',
     'key.replace': 'set up a new encryption key', 'user.reset-approved': `approved a password reset for ${e.target}`, 'thread.open': `started private messages with ${e.target}`,
-    'passkey.add': 'added a passkey', 'passkey.remove': `removed passkeys for ${e.target}`, 'passkey.signin': 'signed in with a passkey', 'passkey.failed': 'failed a passkey sign-in',
+    'passkey.add': 'added a passkey', 'passkey.remove': `removed passkeys for ${e.target}`, 'passkey.signin': 'signed in with a passkey', 'passkey.unlock': 'let a passkey unlock files', 'passkey.failed': 'failed a passkey sign-in',
   }[e.action] || e.action;
   return t + (e.note && !['file.share'].includes(e.action) ? ` (${e.note})` : '');
 }

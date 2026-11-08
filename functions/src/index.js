@@ -848,6 +848,20 @@ export const passkeyLogin = onCall(callOpts, async (req) => {
   return { token, privateKey: pk.privateKey || null, credentialId: pk.credentialId };
 });
 
+/** Signed in: store the file-unlock copy for one of your passkeys (for passkeys that report PRF only when used,
+ *  such as some password-manager extensions: set up after the first passkey sign-in). */
+export const passkeySetUnlock = onCall(callOpts, async (req) => {
+  const u = requireUser(req);
+  const ref = passkeyRef(req.data?.credentialId);
+  const snap = await ref.get();
+  if (!snap.exists || snap.data().uid !== u.uid) throw new HttpsError('not-found', 'That passkey isn’t on your account.');
+  const k = req.data?.privateKey;
+  if (!k || typeof k.wrapped !== 'string' || typeof k.iv !== 'string' || k.wrapped.length >= 2000) throw new HttpsError('invalid-argument', 'Bad key.');
+  await ref.update({ privateKey: { wrapped: k.wrapped, iv: k.iv, v: 1 } });
+  await audit('passkey.unlock', { target: u.email, note: snap.data().label }, req);
+  return { ok: true };
+});
+
 /** Signed in: your passkeys; an administrator may ask for anyone's. */
 export const passkeyList = onCall(callOpts, async (req) => {
   const u = requireUser(req);
