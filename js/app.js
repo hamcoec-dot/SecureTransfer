@@ -13,7 +13,7 @@ import {
 import { getStorage, connectStorageEmulator, ref as sref, uploadBytesResumable } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-functions.js';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app-check.js';
-import { CONFIG, MODE, FUNCTIONS_REGION, IDLE_MINUTES, PORTAL_URL } from './config.js';
+import { CONFIG, MODE, FUNCTIONS_REGION, IDLE_MINUTES, PORTAL_URL } from './config.js?v=2';
 import * as C from './crypto.js';
 
 // ---------------------------------------------------------------- Firebase
@@ -207,7 +207,7 @@ $('#f-setpass').addEventListener('submit', async (e) => {
   try {
     await confirmPasswordReset(auth, resetCode, a);
     resetCode = null;
-    history.replaceState(null, '', location.pathname + (params.has('staging') ? '?staging' : ''));
+    history.replaceState(null, '', location.pathname + (MODE === 'staging' ? '?staging' : ''));
     $('#sp-pass').value = $('#sp-pass2').value = '';
     showStep('#f-pass');
     toast('Password saved. Sign in now.');

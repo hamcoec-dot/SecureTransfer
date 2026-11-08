@@ -30,7 +30,8 @@ const EMULATOR = {
 
 const q = new URLSearchParams(location.search);
 const local = ['localhost', '127.0.0.1'].includes(location.hostname);
-export const MODE = local && q.has('emulator') ? 'emulator' : q.has('staging') ? 'staging' : 'prod';
+// Password emails link straight to this page with the project's apiKey, which tells test links from live ones.
+export const MODE = local && q.has('emulator') ? 'emulator' : q.has('staging') || q.get('apiKey') === STAGING.apiKey ? 'staging' : 'prod';
 export const CONFIG = MODE === 'emulator' ? EMULATOR : MODE === 'staging' ? STAGING : PROD;
 export const FUNCTIONS_REGION = 'us-east1';
 export const IDLE_MINUTES = 30;
