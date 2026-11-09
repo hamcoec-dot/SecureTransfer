@@ -14,7 +14,7 @@ import { getStorage, connectStorageEmulator, ref as sref, uploadBytesResumable }
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-functions.js';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app-check.js';
 import { CONFIG, MODE, FUNCTIONS_REGION, IDLE_MINUTES, PORTAL_URL } from './config.js?v=2';
-import * as C from './crypto.js';
+import * as C from './crypto.js?v=2';
 
 // ---------------------------------------------------------------- Firebase
 const app = initializeApp(CONFIG);
@@ -30,7 +30,21 @@ if (MODE === 'emulator') {
   connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 }
 setPersistence(auth, browserSessionPersistence);
-const call = (name) => async (data) => (await httpsCallable(fns, name, { timeout: 120000 })(data)).data;
+// Every action goes to the one "api" function. Pinging it as the page opens starts its server (and the sign-in check's)
+// while the person is still typing, so the first real request doesn't wait 3 to 5 seconds for a cold start.
+// A project not yet updated has no "api": then the old separate addresses are used.
+const apiFn = httpsCallable(fns, 'api', { timeout: 120000 });
+const apiReady = apiFn({ op: 'ping' }).then(() => true, (e) => !['functions/not-found', 'functions/internal'].includes(e?.code));
+const call = (name) => async (data) => ((await apiReady)
+  ? (await apiFn({ op: name, data })).data
+  : (await httpsCallable(fns, name, { timeout: 120000 })(data)).data);
+let hookWarmed = false;
+function warmSignInCheck() {
+  // The sign-in check runs on its own server; an empty request (refused, no data sent) is enough to start it.
+  if (hookWarmed || MODE === 'emulator') return;
+  hookWarmed = true;
+  fetch(`https://${FUNCTIONS_REGION}-${CONFIG.projectId}.cloudfunctions.net/checkSignIn`, { method: 'POST', mode: 'no-cors', body: '' }).catch(() => {});
+}
 const api = Object.fromEntries(['recordSignIn', 'invite', 'updateMember', 'removeUser', 'approveReset', 'replaceKey',
   'listFolders', 'createFolder', 'updateFolder', 'deleteFolder', 'recipients', 'finalizeUpload', 'getDownload', 'deleteFile',
   'addFileKeys', 'postMessage', 'openThread', 'createDropoff', 'dropoffStart', 'dropoffFinish', 'saveSettings',
@@ -66,6 +80,61 @@ const initials = (n) => String(n || '?').split(/[\s@.]+/).filter(Boolean).map((w
 const extOf = (n) => (/\.([a-z0-9]+)$/i.exec(n) || [, ''])[1].toLowerCase();
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 4000); }
+// ---------------------------------------------------------------- progress
+/** The progress card: PG.show(title, fraction 0..1 or null for "working on it", sub-line); PG.hide(). */
+const PG = {
+  show(title, frac = null, sub = '') {
+    const el = $('#progress'), track = $('#pg-track');
+    el.hidden = false;
+    if ($('#pg-title').textContent !== title) $('#pg-title').textContent = title;
+    $('#pg-sub').textContent = sub;
+    el.classList.toggle('indet', frac == null);
+    if (frac == null) { $('#pg-bar').style.width = ''; $('#pg-pct').textContent = ''; track.removeAttribute('aria-valuenow'); return; }
+    const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+    $('#pg-bar').style.width = pct + '%'; $('#pg-pct').textContent = pct + '%'; track.setAttribute('aria-valuenow', pct);
+  },
+  hide() { $('#progress').hidden = true; },
+};
+/** Shows a spinner and a short message on a button while fn runs, and stops double clicks. */
+async function busy(btn, text, fn) {
+  if (!btn) return fn();
+  if (btn.getAttribute('aria-busy') === 'true') return;
+  const old = btn.innerHTML;
+  btn.setAttribute('aria-busy', 'true'); btn.disabled = true; btn.classList.add('is-busy');
+  btn.innerHTML = `<span class="spin" aria-hidden="true"></span>${esc(text)}`;
+  try { return await fn(); }
+  finally { btn.innerHTML = old; btn.disabled = false; btn.classList.remove('is-busy'); btn.removeAttribute('aria-busy'); }
+}
+/** Upload with progress (fetch can't report upload progress). */
+function putWithProgress(url, body, headers, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', url);
+    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => (x.status >= 200 && x.status < 300 ? resolve() : reject(new Error('The upload was refused. Try again.')));
+    x.onerror = () => reject(new Error('The upload was interrupted. Check your connection and try again.'));
+    x.send(body);
+  });
+}
+/** Download with progress. Returns the bytes, or throws `failMsg`. */
+async function getWithProgress(url, onProgress, failMsg) {
+  const res = await fetch(url, { referrerPolicy: 'no-referrer' });
+  if (!res.ok) throw new Error(failMsg);
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  let out = new Uint8Array(total), got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (got + value.length > out.length) { const bigger = new Uint8Array(Math.max(out.length * 2, got + value.length)); bigger.set(out.subarray(0, got)); out = bigger; }
+    out.set(value, got); got += value.length;
+    onProgress(Math.min(1, got / total));
+  }
+  return out.subarray(0, got);
+}
+
 function errText(e) {
   const m = (e?.message || String(e)).replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '');
   // A bare "Error" helps nobody: show the code so a screenshot says what went wrong.
@@ -178,6 +247,7 @@ function showStep(id) {
   $(id).querySelector('input')?.focus();
 }
 function showSignIn() {
+  warmSignInCheck();
   $('#app').hidden = true; $('#dropoff').hidden = true; $('#sendpage').hidden = true; $('#signin').hidden = false;
   if (resetCode) return;
   showStep('#f-pass');
@@ -205,7 +275,7 @@ $('#f-setpass').addEventListener('submit', async (e) => {
   if (a.length < 12) { err.textContent = 'Use at least 12 characters.'; return; }
   if (a !== b) { err.textContent = 'The two passwords don\u2019t match.'; return; }
   try {
-    await confirmPasswordReset(auth, resetCode, a);
+    await busy($('#f-setpass button[type=submit]'), 'Saving…', () => confirmPasswordReset(auth, resetCode, a));
     resetCode = null;
     history.replaceState(null, '', location.pathname + (MODE === 'staging' ? '?staging' : ''));
     $('#sp-pass').value = $('#sp-pass2').value = '';
@@ -224,7 +294,7 @@ $('#f-pass').addEventListener('submit', async (e) => {
   if (!email || !pass) { $('#err-pass').textContent = 'Enter your email and password.'; return; }
   pendingPassword = pass;
   try {
-    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    const cred = await busy(e.submitter || $('#f-pass button[type=submit]'), 'Checking your password…', () => signInWithEmailAndPassword(auth, email, pass));
     // Signed in with only a password: the account has no authenticator yet. Set one up now.
     await startEnroll(cred.user);
   } catch (err) {
@@ -250,7 +320,7 @@ $('#f-code').addEventListener('submit', async (e) => {
   const hint = resolver?.hints.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID);
   if (!hint) { $('#err-code').textContent = 'This account has no authenticator set up. Contact the Election Commission.'; return; }
   try {
-    await resolver.resolveSignIn(TotpMultiFactorGenerator.assertionForSignIn(hint.uid, code));
+    await busy($('#f-code button[type=submit]'), 'Checking your code…', () => resolver.resolveSignIn(TotpMultiFactorGenerator.assertionForSignIn(hint.uid, code)));
     $('#si-code').value = '';
   } catch (err) {
     $('#err-code').textContent = err.code === 'auth/invalid-verification-code' ? 'That code didn’t work. Check the app and try the newest code.' : errText(err);
@@ -285,7 +355,7 @@ $('#f-enroll').addEventListener('submit', async (e) => {
   $('#err-enroll').textContent = '';
   try {
     const code = $('#en-code').value.replace(/\D/g, '');
-    await multiFactor(auth.currentUser).enroll(TotpMultiFactorGenerator.assertionForEnrollment(enrollSecret, code), 'Authenticator app');
+    await busy($('#f-enroll button[type=submit]'), 'Turning on…', () => multiFactor(auth.currentUser).enroll(TotpMultiFactorGenerator.assertionForEnrollment(enrollSecret, code), 'Authenticator app'));
     // Enrolling ends the session; sign in again with the new code so every token carries the second step.
     toast('Authenticator turned on. Sign in again with a new code.');
     $('#en-code').value = '';
@@ -299,13 +369,13 @@ $('#f-enroll').addEventListener('submit', async (e) => {
 $('#forgot').addEventListener('click', async () => {
   const email = $('#si-email').value.trim();
   if (!email) { $('#err-pass').textContent = 'Type your email above first.'; return; }
-  try { await api.requestPasswordEmail({ email }); } catch { /* same message either way */ }
+  await busy($('#forgot'), 'Sending…', () => api.requestPasswordEmail({ email }).catch(() => { /* same message either way */ }));
   $('#err-pass').textContent = '';
   toast('If that address has an account, a reset link is on its way. Files shared before the reset need the Commission to re-share them.');
 });
 $('#signout').addEventListener('click', () => signOutNow('Signed out.'));
 async function signOutNow(msg) {
-  S.privateKey = null; S.files = {}; S.folders = [];
+  S.privateKey = null; S.files = {}; S.folders = []; S.foldersP = null;
   await clearKeys();
   await signOut(auth).catch(() => {});
   if (msg) toast(msg);
@@ -329,7 +399,9 @@ onAuthStateChanged(auth, async (user) => {
   const tok = await user.getIdTokenResult();
   if (!tok.claims.firebase?.sign_in_second_factor && tok.claims.passkey !== true) return; // still in enrollment
   S.user = user; S.admin = tok.claims.admin === true; S.viaPasskey = tok.claims.passkey === true;
-  $('#signin').hidden = false; showStep('#f-busy');
+  $('#signin').hidden = false; showStep('#f-busy'); $('#busy-text').textContent = 'Checking your account…';
+  // The folder list doesn't depend on the next steps: fetch it at the same time.
+  S.foldersP = loadFolders(); S.foldersP.catch(() => {});
   try {
     S.info = await api.recordSignIn({ deviceId: deviceId(), deviceLabel: deviceLabel() });
     S.name = S.info.name || user.email;
@@ -352,9 +424,10 @@ async function enterApp(user) {
   $('#me-role').textContent = S.admin ? 'Administrator' : user.email;
   document.body.classList.toggle('is-admin', S.admin);
   if (MODE !== 'prod') { $('#env-bar').hidden = false; $('#env-bar').textContent = MODE === 'staging' ? 'Test site: use only test files.' : 'Local emulators.'; }
+  $('#signin').hidden = false; showStep('#f-busy'); $('#busy-text').textContent = 'Loading your folders…';
+  try { await (S.foldersP || loadFolders()); } catch { await loadFolders(); } finally { S.foldersP = null; }
   $('#signin').hidden = true; $('#app').hidden = false;
   bumpIdle();
-  await loadFolders();
   route();
 }
 
@@ -364,6 +437,10 @@ $('#f-unlock').addEventListener('submit', async (e) => {
   const pass = $('#ul-pass').value;
   if (!pass || !S.user) return;
   $('#err-unlock').textContent = '';
+  const btn = $('#f-unlock button[type=submit]');
+  btn.disabled = true; btn.setAttribute('aria-busy', 'true'); const label = btn.innerHTML;
+  btn.innerHTML = '<span class="spin" aria-hidden="true"></span>Unlocking…';
+  const done = () => { btn.innerHTML = label; btn.disabled = false; btn.removeAttribute('aria-busy'); };
   try {
     const snap = await getDoc(doc(db, `privateKeys/${S.user.uid}`));
     const upgrade = S.viaPasskey && pendingPrf && !pendingPrf.record ? pendingPrf : null;
@@ -375,14 +452,17 @@ $('#f-unlock').addEventListener('submit', async (e) => {
         await api.passkeySetUnlock({ credentialId: upgrade.credentialId, privateKey: await C.wrapPrivateKeyWithPrf(key, upgrade.prf, upgrade.credentialId) })
           .then(() => toast('Your passkey will unlock your files from now on.')).catch(() => {});
       }
-      S.privateKey = S.viaPasskey && $('#ul-remember').checked ? await rememberDevice(S.user.uid, key) : await C.unwrapPrivateKey(snap.data(), pass);
+      // One slow password step, not two: the unlocked copy is made non-exportable instead of unwrapped again.
+      S.privateKey = S.viaPasskey && $('#ul-remember').checked ? await rememberDevice(S.user.uid, key) : await C.nonExtractable(key);
     } else {
       S.privateKey = await C.unwrapPrivateKey(snap.data(), pass);
     }
     $('#ul-pass').value = '';
     await cacheKey(S.user.uid, S.privateKey);
+    done();
     await enterApp(S.user);
   } catch (err) {
+    done();
     $('#err-unlock').textContent = /Wrong password/.test(err.message) ? 'That password didn’t unlock your files.' : errText(err);
   }
 });
@@ -414,7 +494,7 @@ if (window.PublicKeyCredential) $('#pk-signin').hidden = false;
 $('#pk-signin').addEventListener('click', async () => {
   $('#err-pass').textContent = '';
   try {
-    const { id, options } = await api.passkeyLoginOptions({});
+    const { id, options } = await busy($('#pk-signin'), 'Starting…', () => api.passkeyLoginOptions({}));
     const cred = await navigator.credentials.get({ publicKey: { ...pkGet(options), extensions: PRF_EXT } });
     if (!cred) return;
     showStep('#f-busy'); $('#busy-text').textContent = 'Signing in…';
@@ -517,12 +597,9 @@ async function unlockKeys(user, needsKey) {
 
 // ---------------------------------------------------------------- data
 async function loadFolders() {
-  const r = await api.listFolders({});
+  const [r, snap] = await Promise.all([api.listFolders({}), S.admin ? getDocs(collection(db, 'users')) : null]);
   S.folders = r.folders;
-  if (S.admin) {
-    const snap = await getDocs(collection(db, 'users'));
-    S.people = snap.docs.map((d) => ({ uid: d.id, ...d.data() })).filter((p) => !p.removed);
-  }
+  if (snap) S.people = snap.docs.map((d) => ({ uid: d.id, ...d.data() })).filter((p) => !p.removed);
 }
 const folderById = (id) => S.folders.find((f) => f.id === id);
 
@@ -532,9 +609,8 @@ async function loadFiles(f) {
     : f.perm === 'upload' ? [query(base, where('uploadedBy', '==', S.user.uid))]
     : [query(base, where('everyone', '==', true)), query(base, where('visibleTo', 'array-contains', S.user.uid))];
   const seen = new Map();
-  for (const q of queries) (await getDocs(q)).docs.forEach((d) => seen.set(d.id, d));
-  const files = [];
-  for (const d of seen.values()) {
+  for (const snap of await Promise.all(queries.map((q) => getDocs(q)))) snap.docs.forEach((d) => seen.set(d.id, d));
+  const files = await Promise.all([...seen.values()].map(async (d) => {
     const x = { id: d.id, ...d.data() };
     x.expires = tsMs(x.expiresAt);
     x.locked = !x.keys?.[S.user.uid];
@@ -542,8 +618,8 @@ async function loadFiles(f) {
       try { x.fileKey = await C.unwrapFileKey(x.keys[S.user.uid], S.user.uid, S.privateKey, S.admin); x.plainName = await C.decryptText(x.fileKey, x.name, 'file name v1'); }
       catch { x.locked = true; }
     }
-    files.push(x);
-  }
+    return x;
+  }));
   files.sort((a, b) => b.uploadedAt - a.uploadedAt);
   S.files[f.id] = files;
   if (S.admin) shareMissingKeys(f, files).catch(() => {});
@@ -595,11 +671,14 @@ addEventListener('hashchange', () => { if (isPublicLink()) showPublicLink(); els
 
 async function render(keepFocus) {
   const v = $('#view');
+  const bar = setTimeout(() => { $('#topbar').hidden = false; v.setAttribute('aria-busy', 'true'); }, 150);
   try {
     const html = await ({ sends: viewSends, overview: viewOverview, folder: () => viewFolder(S.arg), requests: viewRequests, people: viewPeople, activity: viewActivity, rules: viewRules, account: viewAccount }[S.route])();
     v.innerHTML = html;
   } catch (err) {
     v.innerHTML = `<div class="panel panel-b">Couldn’t load this page: ${esc(errText(err))}</div>`;
+  } finally {
+    clearTimeout(bar); $('#topbar').hidden = true; v.removeAttribute('aria-busy');
   }
   renderRail();
   if (!keepFocus) v.focus({ preventScroll: true });
@@ -628,7 +707,7 @@ async function viewOverview() {
 async function viewFolder(id) {
   const f = folderById(id);
   if (!f) return '<div class="empty">That folder was deleted, or your access ended. <a href="#overview">Back to all folders</a></div>';
-  const files = await loadFiles(f);
+  const [files, messages, note] = await Promise.all([loadFiles(f), loadMessages(f), folderNote(f)]);
   const canUp = S.admin || f.perm === 'upload' || f.perm === 'both';
   const size = files.reduce((a, x) => a + x.size, 0);
   const rows = files.map((x) => {
@@ -651,8 +730,6 @@ async function viewFolder(id) {
       <div class="nm">${esc(m.name || m.email)}</div><div class="em">${esc(m.email)}</div><div class="em">Access ends ${fmtDate(m.until)}</div></div>
       <div style="display:grid;gap:4px;justify-items:end"><span class="perm${m.perm === 'upload' ? ' up' : ''}">${PERM_TEXT[m.perm]}</span>
       <button class="linkish" style="color:var(--bad)" data-act="removemember" data-uid="${m.uid}">Remove</button></div></div>`).join('') : '';
-  const messages = await loadMessages(f);
-  const note = await folderNote(f);
   return `<div class="head"><div><div class="eyebrow"><a href="#overview" style="color:inherit">Shared folders</a></div><h1>${esc(f.name)}</h1>
     ${f.note ? `<p>${esc(f.note)}</p>` : ''}
     <div class="facts" style="margin-top:10px"><span class="chip"><svg class="icon"><use href="#i-clock"/></svg>Each file deleted ${f.days} days after upload</span>
@@ -685,15 +762,14 @@ async function viewFolder(id) {
 
 async function loadMessages(f) {
   const snap = await getDocs(query(collection(db, `folders/${f.id}/messages`), orderBy('at', 'asc'), limit(200)));
-  const out = [];
-  for (const d of snap.docs) {
+  const out = await Promise.all(snap.docs.map(async (d) => {
     const m = d.data();
     let text = '<i>You can’t read this message yet.</i>';
     if (m.keys?.[S.user.uid]) {
       try { const k = await C.unwrapFileKey(m.keys[S.user.uid], S.user.uid, S.privateKey); text = esc(await C.decryptText(k, m.box, 'message v1')); } catch {}
     }
-    out.push(`<div style="display:grid;gap:2px"><div class="fmeta"><b style="color:var(--fg)">${esc(m.from === S.user.uid ? 'You' : m.fromEmail)}</b> · ${fmtWhen(m.at)}</div><div style="white-space:pre-wrap">${text}</div></div>`);
-  }
+    return `<div style="display:grid;gap:2px"><div class="fmeta"><b style="color:var(--fg)">${esc(m.from === S.user.uid ? 'You' : m.fromEmail)}</b> · ${fmtWhen(m.at)}</div><div style="white-space:pre-wrap">${text}</div></div>`;
+  }));
   return out.join('');
 }
 async function folderNote(f) {
@@ -751,19 +827,26 @@ async function newQuickSend(s) {
   const file = document.getElementById('qs-file').files[0];
   if (!file) return toast('Choose a file.');
   if (file.size > MAX || !ALLOWED.includes(extOf(file.name))) return toast('Files must be under 250 MB and a document, spreadsheet, image, text or zip file.');
-  toast('Encrypting…');
-  const rec = await getDoc(doc(db, 'settings/recovery'));
-  if (!rec.exists()) return toast('Create the recovery key in Settings first.');
-  const mine = await getDoc(doc(db, `publicKeys/${S.user.uid}`));
-  const sealed = await C.sealSend(new Uint8Array(await file.arrayBuffer()), file.name, r.pw.trim(),
-    [{ id: S.user.uid, publicJwk: mine.data().jwk }, { id: 'recovery', publicJwk: rec.data().jwk }]);
-  const fileId = C.b64url(crypto.getRandomValues(new Uint8Array(15)));
-  toast('Uploading…');
-  const task = uploadBytesResumable(sref(storage, `sends/${S.user.uid}/${fileId}`), sealed.ciphertext, { contentType: 'application/octet-stream' });
-  await new Promise((res, rej) => task.on('state_changed', null, rej, res));
-  const { id } = await api.createSend({ fileId, name: sealed.name, sha256: sealed.sha256, size: file.size, keys: sealed.keys, ext: extOf(file.name),
+  const sub = fmtSize(file.size);
+  let sealed, fileId, id;
+  try {
+    PG.show(`Getting ready to send ${file.name}…`, null, sub);
+    const [rec, mine, bytes] = await Promise.all([getDoc(doc(db, 'settings/recovery')), getDoc(doc(db, `publicKeys/${S.user.uid}`)), file.arrayBuffer()]);
+    if (!rec.exists()) { PG.hide(); return toast('Create the recovery key in Settings first.'); }
+    PG.show(`Encrypting ${file.name}`, 0, sub);
+    sealed = await C.sealSend(new Uint8Array(bytes), file.name, r.pw.trim(),
+      [{ id: S.user.uid, publicJwk: mine.data().jwk }, { id: 'recovery', publicJwk: rec.data().jwk }], undefined,
+      (p) => PG.show(`Encrypting ${file.name}`, p, sub));
+    fileId = C.b64url(crypto.getRandomValues(new Uint8Array(15)));
+    PG.show(`Uploading ${file.name}`, 0, sub);
+    const task = uploadBytesResumable(sref(storage, `sends/${S.user.uid}/${fileId}`), sealed.ciphertext, { contentType: 'application/octet-stream' });
+    await new Promise((res, rej) => task.on('state_changed', (x) => PG.show(`Uploading ${file.name}`, x.bytesTransferred / x.totalBytes, sub), rej, res));
+    PG.show('Creating the link…', null, sub);
+    ({ id } = await api.createSend({ fileId, name: sealed.name, sha256: sealed.sha256, size: file.size, keys: sealed.keys, ext: extOf(file.name),
     accessHash: sealed.accessHash, salt: sealed.salt, iterations: sealed.iterations, hasPassword: !!r.pw.trim(), label: r.label,
-    maxDownloads: Number(r.maxDownloads), days: Number(r.days) });
+    maxDownloads: Number(r.maxDownloads), days: Number(r.days) }));
+  } catch (err) { PG.hide(); return toast('Quick send stopped: ' + errText(err)); }
+  PG.hide();
   const link = `${PORTAL_URL}${MODE === 'staging' ? '?staging' : ''}#send-${id}.${sealed.secret}`;
   await dialog({ title: 'Link ready', ok: 'Done', cancel: '', sub: 'This is the only time the link is shown. The server doesn’t keep a copy, so copy it now.',
     body: `<div class="field"><label for="ql">Link</label><div class="linkbox"><input id="ql" readonly value="${esc(link)}"><button class="btn small" type="button" data-copy="ql">Copy</button></div></div>
@@ -874,6 +957,9 @@ async function uploadFiles(list) {
   if (!f || !list.length) return;
   const bad = list.filter((x) => x.size > MAX || !ALLOWED.includes(extOf(x.name)));
   if (bad.length) { toast(`${bad.map((x) => x.name).join(', ')} can’t be sent: files must be under 250 MB and a document, spreadsheet, image, text or zip file.`); list = list.filter((x) => !bad.includes(x)); if (!list.length) return; }
+  // Ask for the recipients' keys now, while any options dialog is open.
+  const recipientsP = api.recipients({ folder: f.id });
+  recipientsP.catch(() => {});
   let opts = {};
   if (S.admin && (f.members || []).some((m) => m.perm !== 'upload')) {
     const readers = (f.members || []).filter((m) => m.perm !== 'upload');
@@ -890,46 +976,56 @@ async function uploadFiles(list) {
     if (!r.visibleTo.length) { toast('Pick at least one person, or nobody but administrators could open it.'); }
   }
   const status = $('#up-status');
+  const step = (title, frac = null, sub = '') => { PG.show(title, frac, sub); if (status) status.textContent = title; };
+  step('Getting ready to upload…', null, list.length === 1 ? list[0].name : `${list.length} files`);
   try {
-    let { recipients } = await api.recipients({ folder: f.id });
+    let { recipients } = await recipientsP;
     if (opts.visibleTo?.length) {
       const adminIds = new Set(S.people.filter((p) => p.admin).map((p) => p.uid));
       recipients = recipients.filter((r) => r.id === 'recovery' || r.id === S.user.uid || adminIds.has(r.id) || opts.visibleTo.includes(r.id));
     }
     for (const [i, file] of list.entries()) {
-      const label = `${file.name} (${i + 1} of ${list.length})`;
-      status.textContent = `Encrypting ${label}…`;
+      const sub = `${list.length > 1 ? `File ${i + 1} of ${list.length} · ` : ''}${fmtSize(file.size)}`;
+      step(`Reading ${file.name}…`, null, sub);
       const data = new Uint8Array(await file.arrayBuffer());
-      const sealed = await C.sealFile(data, file.name, recipients, (p) => { status.textContent = `Encrypting ${label}: ${Math.round(p * 100)}%`; });
+      step(`Encrypting ${file.name}`, 0, sub);
+      const sealed = await C.sealFile(data, file.name, recipients, (p) => PG.show(`Encrypting ${file.name}`, p, sub));
       const fileId = C.toB64(crypto.getRandomValues(new Uint8Array(15))).replace(/\+/g, '-').replace(/\//g, '_');
+      step(`Uploading ${file.name}`, 0, sub);
       const task = uploadBytesResumable(sref(storage, `folders/${f.id}/${S.user.uid}/${fileId}`), sealed.ciphertext, { contentType: 'application/octet-stream' });
-      await new Promise((res, rej) => task.on('state_changed', (s) => { status.textContent = `Uploading ${label}: ${Math.round(100 * s.bytesTransferred / s.totalBytes)}%`; }, rej, res));
+      await new Promise((res, rej) => task.on('state_changed', (x) => PG.show(`Uploading ${file.name}`, x.bytesTransferred / x.totalBytes, sub), rej, res));
+      step(`Saving ${file.name}…`, null, sub);
       await api.finalizeUpload({ folder: f.id, fileId, name: sealed.name, sha256: sealed.sha256, size: file.size, keys: sealed.keys, ext: extOf(file.name), options: opts });
     }
-    status.textContent = '';
-    toast(list.length === 1 ? 'File sent.' : `${list.length} files sent.`);
+    step('Refreshing the folder…', null, list.length === 1 ? 'Sent.' : `${list.length} files sent.`);
     await render(true);
+    toast(list.length === 1 ? 'File sent.' : `${list.length} files sent.`);
   } catch (err) {
-    status.textContent = '';
     toast('Upload stopped: ' + errText(err));
+  } finally {
+    PG.hide();
+    const st = $('#up-status'); if (st) st.textContent = '';
   }
 }
 
 async function downloadFile(id, recoveryKey = null) {
   const f = folderById(S.arg);
   const file = S.files[f.id]?.find((x) => x.id === id);
+  const nm = file?.plainName || 'the file', sub = file ? fmtSize(file.plainSize || file.size) : '';
   try {
-    toast('Downloading…');
+    PG.show(`Getting ${nm} ready…`, null, sub);
     const r = await api.getDownload({ folder: f.id, file: id, useRecovery: !!recoveryKey });
-    const res = await fetch(r.url, { referrerPolicy: 'no-referrer' });
-    if (!res.ok) throw new Error('The download link expired. Try again.');
-    const ct = new Uint8Array(await res.arrayBuffer());
+    PG.show(`Downloading ${nm}`, 0, sub);
+    const ct = await getWithProgress(r.url, (p) => PG.show(`Downloading ${nm}`, p, sub), 'The download link expired. Try again.');
     const sealed = { keys: r.keys, name: r.name, sha256: r.sha256, ciphertext: ct };
-    const out = recoveryKey ? await C.openFile(sealed, 'recovery', recoveryKey) : await C.openFile(sealed, S.user.uid, S.privateKey);
+    PG.show(`Decrypting ${nm}`, 0, sub);
+    const onP = (p) => PG.show(`Decrypting ${nm}`, p, sub);
+    const out = recoveryKey ? await C.openFile(sealed, 'recovery', recoveryKey, onP) : await C.openFile(sealed, S.user.uid, S.privateKey, onP);
     saveBlob(out.data, out.fileName);
+    PG.hide();
     toast(`Saved ${out.fileName}. Fingerprint matches.`);
     if (file?.deleteAfterDownload || file?.maxDownloads) render(true);
-  } catch (err) { toast('Download failed: ' + errText(err)); }
+  } catch (err) { PG.hide(); toast('Download failed: ' + errText(err)); }
 }
 
 // ---------------------------------------------------------------- actions
@@ -1110,21 +1206,25 @@ $('#f-drop').addEventListener('submit', async (e) => {
   if (!code || !sender || !files.length) { err.textContent = 'Enter the code, your name and email, and choose at least one file.'; return; }
   const bad = files.filter((x) => x.size > MAX || !ALLOWED.includes(extOf(x.name)));
   if (bad.length) { err.textContent = `${bad.map((x) => x.name).join(', ')}: files must be under 250 MB and a document, spreadsheet, image, text or zip file.`; return; }
+  const btn = $('#f-drop button[type=submit]');
+  btn.disabled = true;
   try {
     for (const [i, file] of files.entries()) {
-      const label = `${file.name} (${i + 1} of ${files.length})`;
-      status.textContent = `Preparing ${label}…`;
-      const start = await api.dropoffStart({ id, code, ext: extOf(file.name) });
-      const sealed = await C.sealFile(new Uint8Array(await file.arrayBuffer()), file.name, start.recipients,
-        (p) => { status.textContent = `Encrypting ${label}: ${Math.round(p * 100)}%`; });
-      status.textContent = `Sending ${label}…`;
-      const put = await fetch(start.url, { method: 'PUT', body: sealed.ciphertext, headers: { 'Content-Type': 'application/octet-stream', 'x-goog-content-length-range': `0,${MAX + 1e6}` } });
-      if (!put.ok) throw new Error('The upload was refused. Try again.');
+      const sub = `${files.length > 1 ? `File ${i + 1} of ${files.length} · ` : ''}${fmtSize(file.size)}`;
+      status.textContent = `Sending ${file.name}…`;
+      PG.show(`Getting ready to send ${file.name}…`, null, sub);
+      const [start, bytes] = await Promise.all([api.dropoffStart({ id, code, ext: extOf(file.name) }), file.arrayBuffer()]);
+      const sealed = await C.sealFile(new Uint8Array(bytes), file.name, start.recipients, (p) => PG.show(`Encrypting ${file.name}`, p, sub));
+      PG.show(`Uploading ${file.name}`, 0, sub);
+      await putWithProgress(start.url, sealed.ciphertext, { 'Content-Type': 'application/octet-stream', 'x-goog-content-length-range': `0,${MAX + 1e6}` },
+        (p) => PG.show(`Uploading ${file.name}`, p, sub));
+      PG.show(`Saving ${file.name}…`, null, sub);
       await api.dropoffFinish({ id, code, fileId: start.fileId, name: sealed.name, sha256: sealed.sha256, size: file.size, keys: sealed.keys, ext: extOf(file.name), sender });
     }
     status.textContent = `Sent ${files.length} file${files.length === 1 ? '' : 's'}. The Election Commission has been notified. You can close this page.`;
     $('#dr-files').value = '';
   } catch (ex) { status.textContent = ''; err.textContent = errText(ex); }
+  finally { PG.hide(); btn.disabled = false; }
 });
 
 if (isPublicLink()) showPublicLink();
@@ -1156,20 +1256,23 @@ $('#f-send').addEventListener('submit', async (e) => {
   if (sendMeta.hasPassword && !pw) { err.textContent = 'Enter the password.'; return; }
   try {
     $('#send-btn').disabled = true;
-    status.textContent = 'Checking…';
+    const sub = fmtSize(sendMeta.size);
+    status.textContent = '';
+    PG.show(sendMeta.hasPassword ? 'Checking the password…' : 'Checking the link…', null, sub);
     const access = await C.sendAccess(secret, pw, sendMeta.salt, sendMeta.iterations);
     const r = await api.sendOpen({ id, access });
-    status.textContent = 'Downloading…';
-    const res = await fetch(r.url, { referrerPolicy: 'no-referrer' });
-    if (!res.ok) throw new Error('The download didn\u2019t finish. Reload the page and try again.');
-    const ct = new Uint8Array(await res.arrayBuffer());
-    status.textContent = 'Decrypting…';
-    const out = await C.openSend(secret, pw, sendMeta.salt, sendMeta.iterations, { name: r.name, sha256: r.sha256, ciphertext: ct });
+    PG.show('Downloading', 0, sub);
+    const ct = await getWithProgress(r.url, (p) => PG.show('Downloading', p, sub), 'The download didn\u2019t finish. Reload the page and try again.');
+    PG.show('Decrypting', 0, sub);
+    const out = await C.openSend(secret, pw, sendMeta.salt, sendMeta.iterations, { name: r.name, sha256: r.sha256, ciphertext: ct },
+      (p) => PG.show('Decrypting', p, sub));
+    PG.hide();
     saveBlob(out.data, out.fileName);
     status.innerHTML = `Saved <b>${esc(out.fileName)}</b>. Fingerprint <span class="mono">${out.sha256.slice(0, 16)}\u2026</span> matches what was sent.`;
     sendMeta.remaining -= 1;
     if (sendMeta.remaining > 0) $('#send-btn').disabled = false;
   } catch (ex) {
+    PG.hide();
     $('#send-btn').disabled = false;
     status.textContent = '';
     err.textContent = errText(ex);

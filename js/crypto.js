@@ -114,6 +114,10 @@ export async function unwrapPrivateKeyWithPrf(record, prfOutput, credentialId, e
 // ---------- "remember this computer" for passkey sign-ins ----------
 // For passkeys without PRF: a random AES key that can never leave this browser (non-extractable, kept in
 // IndexedDB) wraps a copy of the private key. A verified passkey sign-in on the same browser then unlocks files.
+/** A non-exportable copy of an exportable private key (for use after it has been re-wrapped). */
+export async function nonExtractable(privateKey) {
+  return subtle.importKey('pkcs8', await subtle.exportKey('pkcs8', privateKey), ECDH, false, ['deriveBits']);
+}
 export async function sealPrivateKeyForDevice(extractablePrivateKey) {
   const deviceKey = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   const iv = randomBytes(12);
@@ -280,7 +284,17 @@ const SEND_INFO_ACCESS = 'HCEC Secure Transfer send access v1';
 export function b64url(bytes) { return toB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 export function fromB64url(s) { return fromB64(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); }
 
-async function sendMaterial(secret, password, salt, iterations) {
+// The recipient page derives the same material twice (to prove access, then to decrypt): the slow password step
+// runs once and the result is reused for the same link, password and salt.
+let lastMaterial = null;
+function sendMaterial(secret, password, salt, iterations) {
+  const id = [b64url(secret), password, toB64(salt), iterations].join('\n');
+  if (lastMaterial?.id !== id) lastMaterial = { id, p: deriveSendMaterial(secret, password, salt, iterations) };
+  const p = lastMaterial.p;
+  p.catch(() => { if (lastMaterial?.p === p) lastMaterial = null; });
+  return p;
+}
+async function deriveSendMaterial(secret, password, salt, iterations) {
   let ikm = secret;
   if (password) {
     const base = await subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
