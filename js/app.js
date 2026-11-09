@@ -32,12 +32,9 @@ if (MODE === 'emulator') {
 setPersistence(auth, browserSessionPersistence);
 // Every action goes to the one "api" function. Pinging it as the page opens starts its server (and the sign-in check's)
 // while the person is still typing, so the first real request doesn't wait 3 to 5 seconds for a cold start.
-// A project not yet updated has no "api": then the old separate addresses are used.
 const apiFn = httpsCallable(fns, 'api', { timeout: 120000 });
-const apiReady = apiFn({ op: 'ping' }).then(() => true, (e) => !['functions/not-found', 'functions/internal'].includes(e?.code));
-const call = (name) => async (data) => ((await apiReady)
-  ? (await apiFn({ op: name, data })).data
-  : (await httpsCallable(fns, name, { timeout: 120000 })(data)).data);
+apiFn({ op: 'ping' }).catch(() => {});
+const call = (name) => async (data) => (await apiFn({ op: name, data })).data;
 let hookWarmed = false;
 function warmSignInCheck() {
   // The sign-in check runs on its own server; an empty request (refused, no data sent) is enough to start it.

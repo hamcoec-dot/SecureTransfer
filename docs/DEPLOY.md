@@ -94,6 +94,4 @@ Accounts come only from invitations, so the first one is made by hand:
 ## One "api" function (2026-11-09)
 Every portal action goes to the single callable `api` (`{ op, data }`), so one cold start per visit instead of one per
 action; the page pings it (and the sign-in check) when it opens. No minimum instances: it still scales to zero, so
-there is no added cost. The old one-function-per-action addresses are still deployed as thin wrappers, for pages
-opened before the change and as a fallback the page uses automatically if a project has no `api` yet. Remove them
-(the `legacy(...)` exports at the bottom of functions/src/index.js) once both projects have served `api` for a while.
+there is no added cost. The old one-function-per-action addresses were removed on 2026-11-09.

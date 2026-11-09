@@ -45,7 +45,7 @@ jobs:
         run: npx --yes firebase-tools@14.27.0 deploy --only functions,firestore,storage --project "${{ inputs.project }}" --non-interactive --force
       - name: Public invoker on the callables and sign-in hooks (each checks sign-in itself)
         run: |
-          for fn in $(grep -oP '^export const \K\w+(?= = (onCall|legacy|beforeUserCreated|beforeUserSignedIn)\()' functions/src/index.js); do
+          for fn in $(grep -oP '^export const \K\w+(?= = (onCall|beforeUserCreated|beforeUserSignedIn)\()' functions/src/index.js); do
             service=$(echo "$fn" | tr '[:upper:]' '[:lower:]')
             gcloud run services add-iam-policy-binding "$service" --region=us-east1 \
               --member=allUsers --role=roles/run.invoker --project="${{ inputs.project }}" --quiet >/dev/null
