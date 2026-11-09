@@ -10,16 +10,24 @@ import { beforeUserCreated, beforeUserSignedIn, HttpsError as IdentityError } fr
 import { setGlobalOptions, logger } from 'firebase-functions/v2';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import * as L from './lib.js';
-import * as WA from '@simplewebauthn/server';
 import { sendMail, mailConfigured, SMTP_URL } from './mail.js';
 
 initializeApp();
 setGlobalOptions({ region: 'us-east1', maxInstances: 5, memory: '256MiB' });
 const db = getFirestore();
+// REST instead of gRPC: a much faster first request after an instance starts (nothing here needs live listeners).
+// Not on the emulators, where the REST client asks for real Google credentials.
+if (!process.env.FIRESTORE_EMULATOR_HOST) db.settings({ preferRest: true });
 const bucket = () => getStorage().bucket();
 const callOpts = { enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== 'true', secrets: [SMTP_URL] };
 const PORTAL_URL = 'https://govotehamiltontn.gov/SecureTransfer/';
 const STAGING = (process.env.GCLOUD_PROJECT || '').endsWith('-staging');
+// Loaded on first use, so starting an instance doesn't wait for the passkey library.
+let waLib;
+const WA = () => (waLib ??= import('@simplewebauthn/server'));
+// Every browser action is a handler here, served by the single "api" function at the bottom (one warm instance
+// serves the whole portal instead of each action waiting for its own cold start).
+const H = {};
 
 // ---------------------------------------------------------------- audit log (hash-chained)
 async function audit(action, details, req) {
@@ -154,29 +162,32 @@ export const checkSignIn = beforeUserSignedIn({ region: 'us-east1' }, async (eve
 });
 
 /** Called by the browser right after a full sign-in. Records the device and alerts on new ones. */
-export const recordSignIn = onCall(callOpts, async (req) => {
+H.recordSignIn = async (req) => {
   const u = requireUser(req);
   const device = L.cleanText(req.data?.deviceId, 64);
   const label = L.cleanText(req.data?.deviceLabel, 120);
   const ref = db.doc(`users/${u.uid}`);
-  const snap = await ref.get();
+  const [snap, pub] = await Promise.all([ref.get(), db.doc(`publicKeys/${u.uid}`).get()]);
   const known = snap.exists ? snap.data().devices || {} : {};
   const isNew = device && !known[device];
-  await ref.set({ lastSignIn: Date.now(), devices: device ? { [device]: { label, first: known[device]?.first || Date.now(), last: Date.now() } } : {} }, { merge: true });
-  await audit('signin', { note: isNew ? `new device: ${label}` : label }, req);
+  const work = [
+    ref.set({ lastSignIn: Date.now(), devices: device ? { [device]: { label, first: known[device]?.first || Date.now(), last: Date.now() } } : {} }, { merge: true }),
+    audit('signin', { note: isNew ? `new device: ${label}` : label }, req),
+  ];
   if (isNew && Object.keys(known).length) {
     const text = `${u.email} signed in to Secure Transfer from a new device (${label || 'unknown browser'}, IP ${req.rawRequest?.ip || 'unknown'}).` +
       ' If this was not you, contact the Election Commission right away.';
-    await notify(u.email, 'Secure Transfer: new sign-in', text);
-    await notify((await adminEmails()).filter((e) => e !== u.email), 'Secure Transfer: new device sign-in', text);
+    work.push(notify(u.email, 'Secure Transfer: new sign-in', text),
+      adminEmails().then((a) => notify(a.filter((e) => e !== u.email), 'Secure Transfer: new device sign-in', text)));
   }
+  await Promise.all(work);
   const user = snap.exists ? snap.data() : {};
-  return { admin: u.admin, needsKey: !(await db.doc(`publicKeys/${u.uid}`).get()).exists, name: user.name || '' };
-});
+  return { admin: u.admin, needsKey: !pub.exists, name: user.name || '' };
+};
 
 /** Admin: invite a person to a folder (creating their account if needed). The browser then sends the
  *  password-setup email with Firebase Auth's own mailer. */
-export const invite = onCall(callOpts, async (req) => {
+H.invite = async (req) => {
   const me = requireAdmin(req);
   const email = String(req.data?.email || '').trim().toLowerCase();
   if (!L.isEmail(email)) throw new HttpsError('invalid-argument', 'Enter a full email address.');
@@ -205,10 +216,10 @@ export const invite = onCall(callOpts, async (req) => {
   }
   const emailed = created ? await passwordEmail(email, true).catch((e) => { logger.warn('invite mail failed', e.message); return false; }) : false;
   return { uid: user.uid, created, emailed };
-});
+};
 
 /** Anyone: "Forgot your password?". Always answers the same way, so it can't be used to find accounts. */
-export const requestPasswordEmail = onCall(callOpts, async (req) => {
+H.requestPasswordEmail = async (req) => {
   const email = String(req.data?.email || '').trim().toLowerCase();
   if (!L.isEmail(email)) return { ok: true };
   const user = await getAuth().getUserByEmail(email).catch(() => null);
@@ -218,12 +229,12 @@ export const requestPasswordEmail = onCall(callOpts, async (req) => {
   if (!snap.exists || snap.data().removed) return { ok: true };
   if (Date.now() - (snap.data().passwordEmailAt || 0) < 2 * 60e3) return { ok: true }; // one every 2 minutes
   await ref.update({ passwordEmailAt: Date.now() });
-  await passwordEmail(email, false).catch((e) => logger.warn('reset mail failed', e.message));
-  await audit('password.email', { actor: user.uid, actorEmail: email }, req);
+  await Promise.all([passwordEmail(email, false).catch((e) => logger.warn('reset mail failed', e.message)),
+    audit('password.email', { actor: user.uid, actorEmail: email }, req)]);
   return { ok: true };
-});
+};
 
-export const updateMember = onCall(callOpts, async (req) => {
+H.updateMember = async (req) => {
   requireAdmin(req);
   const { folder: fid, uid, perm, days, remove } = req.data || {};
   const folder = await getFolder(fid);
@@ -239,10 +250,10 @@ export const updateMember = onCall(callOpts, async (req) => {
   await db.doc(`folders/${fid}`).update(patch);
   await audit('member.change', { folder: fid, target: await userEmail(uid), note: L.canonical({ perm, days }) }, req);
   return { ok: true };
-});
+};
 
 /** Admin: remove a person everywhere and sign them out of every device. */
-export const removeUser = onCall(callOpts, async (req) => {
+H.removeUser = async (req) => {
   requireAdmin(req);
   const uid = String(req.data?.uid || '');
   // There must always be an administrator: admin accounts can't be removed from the portal.
@@ -257,20 +268,20 @@ export const removeUser = onCall(callOpts, async (req) => {
   await getAuth().updateUser(uid, { disabled: true });
   await audit('user.remove', { target: await userEmail(uid) }, req);
   return { ok: true };
-});
+};
 
 /** Admin: approve a password reset for a "no self-service reset" account (after confirming with the person). */
-export const approveReset = onCall(callOpts, async (req) => {
+H.approveReset = async (req) => {
   requireAdmin(req);
   const uid = String(req.data?.uid || '');
   const u = await getAuth().getUser(uid);
   await db.doc(`users/${uid}`).set({ approvedValidAfter: Date.parse(u.tokensValidAfterTime || 0) || Date.now() }, { merge: true });
   await audit('user.reset-approved', { target: u.email }, req);
   return { ok: true };
-});
+};
 
 /** A person stores their public key once; a function replaces it after a reset (the old one is kept). */
-export const replaceKey = onCall(callOpts, async (req) => {
+H.replaceKey = async (req) => {
   const u = requireUser(req);
   const jwk = req.data?.jwk;
   if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256' || typeof jwk.x !== 'string' || typeof jwk.y !== 'string') {
@@ -286,11 +297,11 @@ export const replaceKey = onCall(callOpts, async (req) => {
   await notify(await adminEmails(), 'Secure Transfer: someone needs files re-shared',
     `${u.email} set up a new encryption key (usually after a password reset). Open Secure Transfer to re-share their files.`);
   return { ok: true };
-});
+};
 
 // ---------------------------------------------------------------- folders
 /** The folders this person can open, with what they may do in each (admins see all, with members). */
-export const listFolders = onCall(callOpts, async (req) => {
+H.listFolders = async (req) => {
   const u = requireUser(req);
   const now = Date.now();
   const out = [];
@@ -311,9 +322,9 @@ export const listFolders = onCall(callOpts, async (req) => {
   }
   out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   return { folders: out, admin: u.admin };
-});
+};
 
-export const createFolder = onCall(callOpts, async (req) => {
+H.createFolder = async (req) => {
   const me = requireAdmin(req);
   const s = await settings();
   const name = L.cleanText(req.data?.name, 100);
@@ -328,9 +339,9 @@ export const createFolder = onCall(callOpts, async (req) => {
   });
   await audit(kind === 'request' ? 'request.create' : 'folder.create', { folder: ref.id, note: `${name}; files deleted after ${days} days` }, req);
   return { id: ref.id };
-});
+};
 
-export const updateFolder = onCall(callOpts, async (req) => {
+H.updateFolder = async (req) => {
   requireAdmin(req);
   const s = await settings();
   const fid = String(req.data?.folder || '');
@@ -342,26 +353,27 @@ export const updateFolder = onCall(callOpts, async (req) => {
   await db.doc(`folders/${fid}`).update(patch);
   await audit('folder.change', { folder: fid, note: Object.keys(patch).join(', ') }, req);
   return { ok: true };
-});
+};
 
-export const deleteFolder = onCall(callOpts, async (req) => {
+H.deleteFolder = async (req) => {
   requireAdmin(req);
   const fid = String(req.data?.folder || '');
   await bucket().deleteFiles({ prefix: `folders/${fid}/` }).catch(() => {});
   await db.recursiveDelete(db.doc(`folders/${fid}`));
   await audit('folder.delete', { folder: fid }, req);
   return { ok: true };
-});
+};
 
 /** Public keys of everyone who should be able to open a new file in this folder, plus the recovery key. */
-export const recipients = onCall(callOpts, async (req) => {
+H.recipients = async (req) => {
   const u = requireUser(req);
   const fid = String(req.data?.folder || '');
-  const folder = await getFolder(fid);
+  const [folder, admins, rec] = await Promise.all([getFolder(fid), db.collection('users').where('admin', '==', true).get(),
+    db.doc('settings/recovery').get()]);
   const acc = L.access(memberOf(folder, u.uid), Date.now(), u.admin);
   if (!acc.read) throw new HttpsError('permission-denied', 'You no longer have access to this folder.');
   const ids = new Set([u.uid]);
-  (await db.collection('users').where('admin', '==', true).get()).docs.forEach((d) => ids.add(d.id));
+  admins.docs.forEach((d) => ids.add(d.id));
   const now = Date.now();
   // Files from people outside the commission go only to them and the administrators. Messages and notes, and
   // files from administrators, go to everyone in the folder who may read them.
@@ -372,19 +384,17 @@ export const recipients = onCall(callOpts, async (req) => {
     }
   }
   const out = [];
-  for (const id of ids) {
-    const k = await db.doc(`publicKeys/${id}`).get();
-    if (k.exists) out.push({ id, publicJwk: k.data().jwk });
-  }
-  const rec = await db.doc('settings/recovery').get();
+  const list = [...ids];
+  const keys = await db.getAll(...list.map((id) => db.doc(`publicKeys/${id}`)));
+  keys.forEach((k, i) => { if (k.exists) out.push({ id: list[i], publicJwk: k.data().jwk }); });
   if (!rec.exists) throw new HttpsError('failed-precondition', 'The recovery key has not been set up yet.');
   out.push({ id: 'recovery', publicJwk: rec.data().jwk });
   return { recipients: out };
-});
+};
 
 // ---------------------------------------------------------------- files
 /** After the browser uploads ciphertext to folders/{fid}/{uid}/{fileId}, it records the file here. */
-export const finalizeUpload = onCall(callOpts, async (req) => {
+H.finalizeUpload = async (req) => {
   const u = requireUser(req);
   const { folder: fid, fileId, name, sha256, size, keys, ext } = req.data || {};
   const folder = await getFolder(fid);
@@ -396,12 +406,13 @@ export const finalizeUpload = onCall(callOpts, async (req) => {
   if (!name || typeof name.iv !== 'string' || typeof name.ct !== 'string' || name.ct.length > 2000) throw new HttpsError('invalid-argument', 'Bad name.');
   if (!keysValid(keys, [u.uid, 'recovery'])) throw new HttpsError('invalid-argument', 'The file must be shared with you and the recovery key.');
   const path = `folders/${fid}/${u.uid}/${fileId}`;
-  const [exists] = await bucket().file(path).exists();
-  if (!exists) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
-  const [meta] = await bucket().file(path).getMetadata();
-  if (Number(meta.size) > L.MAX_FILE_BYTES + 1e6) { await bucket().file(path).delete(); throw new HttpsError('invalid-argument', 'File too large.'); }
   const ref = db.doc(`folders/${fid}/files/${fileId}`);
-  if ((await ref.get()).exists) throw new HttpsError('already-exists', 'Already recorded.');
+  const [meta, prior] = await Promise.all([
+    bucket().file(path).getMetadata().then(([m]) => m, (e) => { if (e.code === 404) return null; throw e; }),
+    ref.get()]);
+  if (!meta) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
+  if (Number(meta.size) > L.MAX_FILE_BYTES + 1e6) { await bucket().file(path).delete(); throw new HttpsError('invalid-argument', 'File too large.'); }
+  if (prior.exists) throw new HttpsError('already-exists', 'Already recorded.');
   const now = Date.now();
   const opts = req.data?.options || {};
   const picked = u.admin && Array.isArray(opts.visibleTo) ? opts.visibleTo.filter((x) => typeof x === 'string').slice(0, 50) : [];
@@ -414,23 +425,25 @@ export const finalizeUpload = onCall(callOpts, async (req) => {
     expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)),
     everyone, visibleTo, maxDownloads, deleteAfterDownload: u.admin && opts.deleteAfterDownload === true, downloads: 0,
   });
-  await audit('file.upload', { folder: fid, file: fileId, note: `sha256 ${sha256.slice(0, 16)}…, ${meta.size} bytes` }, req);
-  if (!u.admin) {
-    await notify(await adminEmails(), `Secure Transfer: new file in "${folder.name}"`,
-      `${u.email} sent a file to "${folder.name}". It will be deleted automatically on ${new Date(L.expiresAt(now, folder.days)).toDateString()}.`);
-  } else {
-    const now2 = Date.now();
-    const readers = Object.entries(folder.members || {}).filter(([uid, m]) => ms(m.until) > now2 && m.perm !== 'upload'
-      && (everyone || visibleTo.includes(uid))).map(([uid]) => uid);
-    const emails = (await Promise.all(readers.map(userEmail))).filter(Boolean);
-    await notify(emails, 'Secure Transfer: a file is ready for you',
-      `The Hamilton County Election Commission shared a file with you in "${folder.name}". Sign in to download it before ${new Date(L.expiresAt(now, folder.days)).toDateString()}.`);
-  }
+  const tell = async () => {
+    if (!u.admin) {
+      await notify(await adminEmails(), `Secure Transfer: new file in "${folder.name}"`,
+        `${u.email} sent a file to "${folder.name}". It will be deleted automatically on ${new Date(L.expiresAt(now, folder.days)).toDateString()}.`);
+    } else {
+      const now2 = Date.now();
+      const readers = Object.entries(folder.members || {}).filter(([uid, m]) => ms(m.until) > now2 && m.perm !== 'upload'
+        && (everyone || visibleTo.includes(uid))).map(([uid]) => uid);
+      const emails = (await Promise.all(readers.map(userEmail))).filter(Boolean);
+      await notify(emails, 'Secure Transfer: a file is ready for you',
+        `The Hamilton County Election Commission shared a file with you in "${folder.name}". Sign in to download it before ${new Date(L.expiresAt(now, folder.days)).toDateString()}.`);
+    }
+  };
+  await Promise.all([audit('file.upload', { folder: fid, file: fileId, note: `sha256 ${sha256.slice(0, 16)}…, ${meta.size} bytes` }, req), tell()]);
   return { ok: true };
-});
+};
 
 /** Checks access, counts and logs the download, returns a 5-minute link to the ciphertext. */
-export const getDownload = onCall(callOpts, async (req) => {
+H.getDownload = async (req) => {
   const u = requireUser(req);
   const { folder: fid, file: fileId } = req.data || {};
   const folder = await getFolder(fid);
@@ -448,21 +461,17 @@ export const getDownload = onCall(callOpts, async (req) => {
     tx.update(ref, patch);
     return f;
   });
-  const url = await readUrl(file.path);
-  await audit('file.download', { folder: fid, file: fileId }, req);
-  if (file.uploadedBy !== u.uid) {
-    const to = await userEmail(file.uploadedBy);
-    await notify(to, 'Secure Transfer: your file was downloaded',
+  const [url] = await Promise.all([readUrl(file.path), audit('file.download', { folder: fid, file: fileId }, req),
+    file.uploadedBy === u.uid ? null : userEmail(file.uploadedBy).then((to) => notify(to, 'Secure Transfer: your file was downloaded',
       `${u.email} downloaded a file you shared in "${folder.name}" on ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.` +
-      (file.deleteAfterDownload ? ' It was set to delete after download and will be removed within 10 minutes.' : ''));
-  }
+      (file.deleteAfterDownload ? ' It was set to delete after download and will be removed within 10 minutes.' : '')))]);
   const keys = {};
   if (file.keys[u.uid]) keys[u.uid] = file.keys[u.uid];
   if (u.admin && req.data?.useRecovery === true) keys.recovery = file.keys.recovery;
   return { url, keys, name: file.name, sha256: file.sha256 };
-});
+};
 
-export const deleteFile = onCall(callOpts, async (req) => {
+H.deleteFile = async (req) => {
   const u = requireUser(req);
   const { folder: fid, file: fileId } = req.data || {};
   const ref = db.doc(`folders/${fid}/files/${fileId}`);
@@ -473,10 +482,10 @@ export const deleteFile = onCall(callOpts, async (req) => {
   await ref.delete();
   await audit('file.delete', { folder: fid, file: fileId }, req);
   return { ok: true };
-});
+};
 
 /** Admin: add wrapped keys so more people (or someone with a new key) can open existing files. */
-export const addFileKeys = onCall(callOpts, async (req) => {
+H.addFileKeys = async (req) => {
   requireAdmin(req);
   const { folder: fid, file: fileId, keys } = req.data || {};
   if (!keysValid(keys, Object.keys(keys || {}))) throw new HttpsError('invalid-argument', 'Bad keys.');
@@ -485,10 +494,10 @@ export const addFileKeys = onCall(callOpts, async (req) => {
   await db.doc(`folders/${fid}/files/${fileId}`).update(patch);
   await audit('file.share', { folder: fid, file: fileId, note: Object.keys(patch).length + ' people' }, req);
   return { ok: true };
-});
+};
 
 // ---------------------------------------------------------------- messages (encrypted in the browser)
-export const postMessage = onCall(callOpts, async (req) => {
+H.postMessage = async (req) => {
   const u = requireUser(req);
   const { folder: fid, box, keys } = req.data || {};
   const folder = await getFolder(fid);
@@ -501,10 +510,10 @@ export const postMessage = onCall(callOpts, async (req) => {
     expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)) });
   await audit('message.post', { folder: fid }, req);
   return { ok: true };
-});
+};
 
 /** Private one-to-one thread with a person: a hidden two-member folder, made on first use. */
-export const openThread = onCall(callOpts, async (req) => {
+H.openThread = async (req) => {
   const me = requireAdmin(req);
   const uid = String(req.data?.uid || '');
   const id = 'dm_' + createHash('sha256').update([me.uid, uid].sort().join(':')).digest('hex').slice(0, 20);
@@ -516,10 +525,10 @@ export const openThread = onCall(callOpts, async (req) => {
     await audit('thread.open', { folder: id, target: await userEmail(uid) }, req);
   }
   return { id };
-});
+};
 
 // ---------------------------------------------------------------- drop-off page (code instead of an account)
-export const createDropoff = onCall(callOpts, async (req) => {
+H.createDropoff = async (req) => {
   const me = requireAdmin(req);
   const s = await settings();
   const label = L.cleanText(req.data?.label, 100) || 'Drop-off';
@@ -534,7 +543,7 @@ export const createDropoff = onCall(callOpts, async (req) => {
     closesAt: Timestamp.fromMillis(Date.now() + open * L.DAY_MS), uploads: 0, maxUploads: 50, failures: 0 });
   await audit('dropoff.create', { folder: fref.id, note: `${label}; open ${open} days` }, req);
   return { id, code, url: `${PORTAL_URL}#dropoff-${id}` };
-});
+};
 
 async function dropoffFor(req) {
   const id = String(req.data?.id || '');
@@ -553,16 +562,15 @@ async function dropoffFor(req) {
 }
 
 /** Anyone with the link and code: get the keys to encrypt to and a one-time upload URL. */
-export const dropoffStart = onCall(callOpts, async (req) => {
+H.dropoffStart = async (req) => {
   const { ref, d } = await dropoffFor(req);
   if (d.uploads >= d.maxUploads) throw new HttpsError('resource-exhausted', 'This drop-off is full.');
   if (!L.extensionAllowed('x.' + req.data?.ext)) throw new HttpsError('invalid-argument', 'That type of file can’t be sent here.');
   const out = [];
-  for (const a of (await db.collection('users').where('admin', '==', true).get()).docs) {
-    const k = await db.doc(`publicKeys/${a.id}`).get();
-    if (k.exists) out.push({ id: a.id, publicJwk: k.data().jwk });
-  }
-  const rec = await db.doc('settings/recovery').get();
+  const [admins, rec] = await Promise.all([db.collection('users').where('admin', '==', true).get(), db.doc('settings/recovery').get()]);
+  if (admins.size) (await db.getAll(...admins.docs.map((a) => db.doc(`publicKeys/${a.id}`)))).forEach((k, i) => {
+    if (k.exists) out.push({ id: admins.docs[i].id, publicJwk: k.data().jwk });
+  });
   if (!rec.exists) throw new HttpsError('failed-precondition', 'Not ready yet.');
   out.push({ id: 'recovery', publicJwk: rec.data().jwk });
   const fileId = L.newId(15);
@@ -573,32 +581,31 @@ export const dropoffStart = onCall(callOpts, async (req) => {
   });
   await ref.update({ uploads: FieldValue.increment(1) });
   return { url, fileId, label: d.label, recipients: out };
-});
+};
 
-export const dropoffFinish = onCall(callOpts, async (req) => {
+H.dropoffFinish = async (req) => {
   const { d } = await dropoffFor(req);
   const { fileId, name, sha256, size, keys, ext, sender } = req.data || {};
   if (!/^[A-Za-z0-9_-]{8,40}$/.test(String(fileId))) throw new HttpsError('invalid-argument', 'Bad file id.');
   if (!keysValid(keys, ['recovery'])) throw new HttpsError('invalid-argument', 'Bad keys.');
   const path = `folders/${d.folder}/dropoff/${fileId}`;
-  const [exists] = await bucket().file(path).exists();
-  if (!exists) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
-  const [meta] = await bucket().file(path).getMetadata();
-  const folder = await getFolder(d.folder);
+  const [meta, folder] = await Promise.all([
+    bucket().file(path).getMetadata().then(([m]) => m, (e) => { if (e.code === 404) return null; throw e; }), getFolder(d.folder)]);
+  if (!meta) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
   const now = Date.now();
   await db.doc(`folders/${d.folder}/files/${fileId}`).set({
     path, name, sha256: String(sha256), ext: String(ext).toLowerCase(), size: Number(meta.size), plainSize: Number(size) || 0,
     keys, uploadedBy: 'dropoff', uploaderEmail: L.cleanText(sender, 120), uploadedAt: now,
     expiresAt: Timestamp.fromMillis(L.expiresAt(now, folder.days)), everyone: false, visibleTo: [], maxDownloads: 0, downloads: 0,
   });
-  await audit('dropoff.upload', { folder: d.folder, file: fileId, actor: 'dropoff', actorEmail: L.cleanText(sender, 120) }, req);
-  await notify(await adminEmails(), `Secure Transfer: new file at drop-off "${d.label}"`,
-    `${L.cleanText(sender, 120) || 'Someone'} sent a file through the drop-off "${d.label}".`);
+  await Promise.all([audit('dropoff.upload', { folder: d.folder, file: fileId, actor: 'dropoff', actorEmail: L.cleanText(sender, 120) }, req),
+    adminEmails().then((a) => notify(a, `Secure Transfer: new file at drop-off "${d.label}"`,
+      `${L.cleanText(sender, 120) || 'Someone'} sent a file through the drop-off "${d.label}".`))]);
   return { ok: true };
-});
+};
 
 // ---------------------------------------------------------------- quick send (link + optional password)
-export const createSend = onCall(callOpts, async (req) => {
+H.createSend = async (req) => {
   const u = requireAdmin(req);
   const s = await settings();
   const { fileId, name, sha256, size, keys, ext, accessHash, salt, iterations, hasPassword, label } = req.data || {};
@@ -609,9 +616,8 @@ export const createSend = onCall(callOpts, async (req) => {
   const days = checkDays(req.data?.days ?? 7, s.maxDays);
   const maxDownloads = Math.min(10, Math.max(1, Number(req.data?.maxDownloads) || 1));
   const path = `sends/${u.uid}/${fileId}`;
-  const [exists] = await bucket().file(path).exists();
-  if (!exists) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
-  const [meta] = await bucket().file(path).getMetadata();
+  const meta = await bucket().file(path).getMetadata().then(([m]) => m, (e) => { if (e.code === 404) return null; throw e; });
+  if (!meta) throw new HttpsError('failed-precondition', 'The upload did not finish. Try again.');
   const id = L.newId(12);
   const now = Date.now();
   await db.doc(`sends/${id}`).set({
@@ -622,7 +628,7 @@ export const createSend = onCall(callOpts, async (req) => {
   });
   await audit('send.create', { file: id, note: `${L.cleanText(label, 100) || 'quick send'}; ${maxDownloads} download(s), ${days} days${hasPassword ? ', password' : ''}` }, req);
   return { id };
-});
+};
 
 async function sendFor(id) {
   const ref = db.doc(`sends/${String(id || '').slice(0, 40)}`);
@@ -634,14 +640,14 @@ async function sendFor(id) {
 }
 
 /** Anyone with the link: what the page needs to ask for (never the file name). */
-export const sendInfo = onCall(callOpts, async (req) => {
+H.sendInfo = async (req) => {
   const { d } = await sendFor(req.data?.id);
   return { hasPassword: d.hasPassword, salt: d.salt, iterations: d.iterations, expiresAt: ms(d.expiresAt),
     remaining: d.maxDownloads - d.downloads, size: d.plainSize || d.size, label: d.label || '' };
-});
+};
 
 /** Anyone with the link (and password): check access, count the download, return a 5-minute link. */
-export const sendOpen = onCall(callOpts, async (req) => {
+H.sendOpen = async (req) => {
   const { ref, d } = await sendFor(req.data?.id);
   if (d.failures >= 10) throw new HttpsError('resource-exhausted', 'Too many wrong passwords. Ask the Election Commission to send it again.');
   const given = createHash('sha256').update(String(req.data?.access || '')).digest('hex');
@@ -655,26 +661,25 @@ export const sendOpen = onCall(callOpts, async (req) => {
   const patch = { downloads: FieldValue.increment(1), lastDownloadAt: Date.now() };
   if (after >= d.maxDownloads) patch.expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60e3); // removed by cleanup
   await ref.update(patch);
-  const url = await readUrl(d.path);
-  await audit('send.download', { file: ref.id, actor: 'link', note: `${after} of ${d.maxDownloads}` }, req);
-  await notify(d.creatorEmail, 'Secure Transfer: your quick send was downloaded',
+  const [url] = await Promise.all([readUrl(d.path), audit('send.download', { file: ref.id, actor: 'link', note: `${after} of ${d.maxDownloads}` }, req),
+    notify(d.creatorEmail, 'Secure Transfer: your quick send was downloaded',
     `Your quick send${d.label ? ` "${d.label}"` : ''} was downloaded (${after} of ${d.maxDownloads}) on ` +
     `${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}, from IP ${req.rawRequest?.ip || 'unknown'}.` +
-    (after >= d.maxDownloads ? ' It has reached its limit and will be deleted within 10 minutes.' : ''));
+    (after >= d.maxDownloads ? ' It has reached its limit and will be deleted within 10 minutes.' : ''))]);
   return { url, name: d.name, sha256: d.sha256 };
-});
+};
 
-export const deleteSend = onCall(callOpts, async (req) => {
+H.deleteSend = async (req) => {
   requireAdmin(req);
   const ref = db.doc(`sends/${String(req.data?.id || '')}`);
   const snap = await ref.get();
   if (snap.exists) { await bucket().file(snap.data().path).delete({ ignoreNotFound: true }); await ref.delete(); }
   await audit('send.delete', { file: ref.id }, req);
   return { ok: true };
-});
+};
 
 // ---------------------------------------------------------------- settings, log export
-export const saveSettings = onCall(callOpts, async (req) => {
+H.saveSettings = async (req) => {
   requireAdmin(req);
   const { defaultDays, maxDays, removeUnusedDays } = req.data || {};
   const max = Number(maxDays);
@@ -684,10 +689,10 @@ export const saveSettings = onCall(callOpts, async (req) => {
   await db.doc('settings/main').set({ defaultDays: def, maxDays: max, removeUnusedDays: unused }, { merge: true });
   await audit('settings.change', { note: L.canonical({ def, max, unused }) }, req);
   return { ok: true };
-});
+};
 
 /** Admin, once: store the public half of the offline recovery key. Can't be replaced from the app. */
-export const setRecoveryKey = onCall(callOpts, async (req) => {
+H.setRecoveryKey = async (req) => {
   requireAdmin(req);
   const ref = db.doc('settings/recovery');
   if ((await ref.get()).exists) throw new HttpsError('already-exists', 'The recovery key is already set.');
@@ -696,9 +701,9 @@ export const setRecoveryKey = onCall(callOpts, async (req) => {
   await ref.set({ jwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, setAt: Date.now() });
   await audit('recovery.set', {}, req);
   return { ok: true };
-});
+};
 
-export const exportLog = onCall(callOpts, async (req) => {
+H.exportLog = async (req) => {
   requireAdmin(req);
   const snap = await db.collection('audit').orderBy('seq').get();
   const rows = snap.docs.map((d) => d.data());
@@ -708,9 +713,9 @@ export const exportLog = onCall(callOpts, async (req) => {
     rows.map((r) => [r.seq, new Date(r.entry.at).toISOString(), r.entry.action, r.entry.actor, r.entry.actorEmail,
       r.entry.folder, r.entry.file, r.entry.target, r.entry.note, r.entry.ip, r.hash]));
   return { csv, chain: check };
-});
+};
 
-export const verifyLog = onCall(callOpts, async (req) => {
+H.verifyLog = async (req) => {
   requireAdmin(req);
   const rows = (await db.collection('audit').orderBy('seq').get()).docs.map((d) => d.data());
   const head = await db.doc('auditMeta/head').get();
@@ -719,7 +724,7 @@ export const verifyLog = onCall(callOpts, async (req) => {
     return { ok: false, reason: 'latest entries missing' };
   }
   return check;
-});
+};
 
 // ---------------------------------------------------------------- automatic deletion
 export async function runCleanup(now = Date.now()) {
@@ -769,7 +774,7 @@ export const cleanup = onSchedule({ schedule: 'every 60 minutes', timeZone: 'Ame
   logger.info('cleanup', r);
 });
 
-export const mailStatus = onCall(callOpts, async (req) => { requireAdmin(req); return { configured: mailConfigured() }; });
+H.mailStatus = async (req) => { requireAdmin(req); return { configured: mailConfigured() }; };
 
 // ---------------------------------------------------------------- passkeys (WebAuthn)
 // Identity Platform has no passkeys, so the portal runs WebAuthn itself: a verified passkey assertion (which
@@ -803,12 +808,12 @@ const b64u = (u8) => Buffer.from(u8).toString('base64url');
 const passkeyRef = (id) => db.doc(`passkeys/${createHash('sha256').update(String(id)).digest('hex')}`);
 
 /** Signed in: options for adding a passkey to this account. */
-export const passkeyRegisterOptions = onCall(callOpts, async (req) => {
+H.passkeyRegisterOptions = async (req) => {
   const u = requireUser(req);
   const { rpID } = rpFor(req);
   const user = (await db.doc(`users/${u.uid}`).get()).data() || {};
   const existing = await db.collection('passkeys').where('uid', '==', u.uid).get();
-  const options = await WA.generateRegistrationOptions({
+  const options = await (await WA()).generateRegistrationOptions({
     rpName: 'HCEC Secure Transfer' + (STAGING ? ' (test)' : ''), rpID,
     userID: new TextEncoder().encode(u.uid), userName: u.email + (STAGING ? ' (test site)' : ''),
     userDisplayName: user.name || u.email, attestationType: 'none', timeout: 120000,
@@ -816,16 +821,16 @@ export const passkeyRegisterOptions = onCall(callOpts, async (req) => {
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   });
   return { id: await newChallenge('register', u.uid, options.challenge), options };
-});
+};
 
 /** Signed in: check the new passkey and store it, with the private key copy it unlocks (if any). */
-export const passkeyRegister = onCall(callOpts, async (req) => {
+H.passkeyRegister = async (req) => {
   const u = requireUser(req);
   const { origin, rpID } = rpFor(req);
   const challenge = await takeChallenge(req.data?.id, 'register', u.uid);
   let v;
   try {
-    v = await WA.verifyRegistrationResponse({ response: req.data?.response, expectedChallenge: challenge,
+    v = await (await WA()).verifyRegistrationResponse({ response: req.data?.response, expectedChallenge: challenge,
       expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true });
   } catch (e) { throw new HttpsError('invalid-argument', 'The passkey could not be checked: ' + e.message); }
   if (!v.verified) throw new HttpsError('invalid-argument', 'The passkey could not be checked.');
@@ -842,17 +847,17 @@ export const passkeyRegister = onCall(callOpts, async (req) => {
   await notify(u.email, 'Secure Transfer: a passkey was added',
     `A passkey ("${label}") was added to your Secure Transfer account. If this was not you, contact the Election Commission right away.`);
   return { ok: true, unlocks: !!privateKey };
-});
+};
 
 /** Anyone: options for signing in with a passkey (the browser offers the passkeys it holds for this site). */
-export const passkeyLoginOptions = onCall(callOpts, async (req) => {
+H.passkeyLoginOptions = async (req) => {
   const { rpID } = rpFor(req);
-  const options = await WA.generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120000 });
+  const options = await (await WA()).generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120000 });
   return { id: await newChallenge('login', '', options.challenge), options };
-});
+};
 
 /** Anyone: check a passkey sign-in; returns a sign-in token and the private key copy this passkey unlocks. */
-export const passkeyLogin = onCall(callOpts, async (req) => {
+H.passkeyLogin = async (req) => {
   const { origin, rpID } = rpFor(req);
   const challenge = await takeChallenge(req.data?.id, 'login');
   const response = req.data?.response;
@@ -867,7 +872,7 @@ export const passkeyLogin = onCall(callOpts, async (req) => {
   const pk = snap.data();
   let v;
   try {
-    v = await WA.verifyAuthenticationResponse({ response, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: rpID,
+    v = await (await WA()).verifyAuthenticationResponse({ response, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: rpID,
       credential: { id: pk.credentialId, publicKey: Buffer.from(pk.publicKey, 'base64url'), counter: pk.counter, transports: pk.transports },
       requireUserVerification: true });
   } catch (e) { return fail('check failed: ' + e.message); }
@@ -880,11 +885,11 @@ export const passkeyLogin = onCall(callOpts, async (req) => {
   await audit('passkey.signin', { actor: pk.uid, actorEmail: authUser.email, note: pk.label }, req);
   const token = await getAuth().createCustomToken(pk.uid, { passkey: true });
   return { token, privateKey: pk.privateKey || null, credentialId: pk.credentialId };
-});
+};
 
 /** Signed in: store the file-unlock copy for one of your passkeys (for passkeys that report PRF only when used,
  *  such as some password-manager extensions: set up after the first passkey sign-in). */
-export const passkeySetUnlock = onCall(callOpts, async (req) => {
+H.passkeySetUnlock = async (req) => {
   const u = requireUser(req);
   const ref = passkeyRef(req.data?.credentialId);
   const snap = await ref.get();
@@ -894,19 +899,19 @@ export const passkeySetUnlock = onCall(callOpts, async (req) => {
   await ref.update({ privateKey: { wrapped: k.wrapped, iv: k.iv, v: 1 } });
   await audit('passkey.unlock', { target: u.email, note: snap.data().label }, req);
   return { ok: true };
-});
+};
 
 /** Signed in: your passkeys; an administrator may ask for anyone's. */
-export const passkeyList = onCall(callOpts, async (req) => {
+H.passkeyList = async (req) => {
   const u = requireUser(req);
   const uid = u.admin && req.data?.uid ? String(req.data.uid) : u.uid;
   const q = await db.collection('passkeys').where('uid', '==', uid).get();
   return { passkeys: q.docs.map((d) => ({ id: d.id, label: d.data().label, createdAt: d.data().createdAt, lastUsed: d.data().lastUsed,
     unlocks: !!d.data().privateKey, synced: d.data().backedUp })).sort((a, b) => b.createdAt - a.createdAt) };
-});
+};
 
 /** Signed in: remove one of your passkeys, or (administrator) one or all of someone else's. */
-export const passkeyDelete = onCall(callOpts, async (req) => {
+H.passkeyDelete = async (req) => {
   const u = requireUser(req);
   const uid = u.admin && req.data?.uid ? String(req.data.uid) : u.uid;
   const q = await db.collection('passkeys').where('uid', '==', uid).get();
@@ -918,4 +923,55 @@ export const passkeyDelete = onCall(callOpts, async (req) => {
   if (uid !== u.uid) await notify(email, 'Secure Transfer: your passkeys were removed',
     'An administrator removed passkeys from your Secure Transfer account. Sign in with your password and authenticator code.');
   return { removed: gone.length };
+};
+
+// ---------------------------------------------------------------- the one entry point
+/** Every portal action: { op, data }. "ping" is sent when the page opens, so the instance (and its database
+ *  connection) is up and ready by the time someone has typed their password. It reads one tiny document. */
+export const api = onCall(callOpts, async (req) => {
+  const op = String(req.data?.op || '');
+  if (op === 'ping') { await db.doc('settings/main').get(); return { ok: true }; }
+  if (!Object.hasOwn(H, op)) throw new HttpsError('not-found', 'Unknown action.');
+  return H[op]({ ...req, data: req.data?.data });
 });
+
+// The same actions at their old separate addresses, for pages that were open before this version and for a site
+// talking to a project that hasn't been updated yet. Remove once every project has served "api" for a while.
+function legacy(name) { return onCall(callOpts, (req) => H[name](req)); }
+export const recordSignIn = legacy('recordSignIn');
+export const invite = legacy('invite');
+export const requestPasswordEmail = legacy('requestPasswordEmail');
+export const updateMember = legacy('updateMember');
+export const removeUser = legacy('removeUser');
+export const approveReset = legacy('approveReset');
+export const replaceKey = legacy('replaceKey');
+export const listFolders = legacy('listFolders');
+export const createFolder = legacy('createFolder');
+export const updateFolder = legacy('updateFolder');
+export const deleteFolder = legacy('deleteFolder');
+export const recipients = legacy('recipients');
+export const finalizeUpload = legacy('finalizeUpload');
+export const getDownload = legacy('getDownload');
+export const deleteFile = legacy('deleteFile');
+export const addFileKeys = legacy('addFileKeys');
+export const postMessage = legacy('postMessage');
+export const openThread = legacy('openThread');
+export const createDropoff = legacy('createDropoff');
+export const dropoffStart = legacy('dropoffStart');
+export const dropoffFinish = legacy('dropoffFinish');
+export const createSend = legacy('createSend');
+export const sendInfo = legacy('sendInfo');
+export const sendOpen = legacy('sendOpen');
+export const deleteSend = legacy('deleteSend');
+export const saveSettings = legacy('saveSettings');
+export const setRecoveryKey = legacy('setRecoveryKey');
+export const exportLog = legacy('exportLog');
+export const verifyLog = legacy('verifyLog');
+export const mailStatus = legacy('mailStatus');
+export const passkeyRegisterOptions = legacy('passkeyRegisterOptions');
+export const passkeyRegister = legacy('passkeyRegister');
+export const passkeyLoginOptions = legacy('passkeyLoginOptions');
+export const passkeyLogin = legacy('passkeyLogin');
+export const passkeySetUnlock = legacy('passkeySetUnlock');
+export const passkeyList = legacy('passkeyList');
+export const passkeyDelete = legacy('passkeyDelete');

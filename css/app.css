@@ -218,6 +218,31 @@ dialog::backdrop { background: rgba(10, 16, 34, .55); }
 .toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg);
   padding: 10px 16px; border-radius: var(--r-sm); font-weight: 600; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100% - 32px); z-index: 50; }
 
+/* Progress: a card for encrypting, uploading and downloading; a thin bar while a page loads; spinners on busy buttons */
+.progress-card { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: min(360px, calc(100% - 32px)); background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, .18); padding: 14px 16px; display: grid; gap: 8px; z-index: 60; }
+.pg-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.pg-title { font-weight: 700; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.pg-pct { font-family: var(--font-mono); font-size: 13px; color: var(--muted); flex: none; }
+.pg-sub { font-size: 12.5px; color: var(--muted); }
+.pg-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; position: relative; }
+.pg-bar { height: 100%; width: 0; border-radius: inherit; background: var(--navy); transition: width .2s ease; }
+.indet .pg-bar, .pg-track.indet .pg-bar { width: 35%; position: absolute; left: 0; animation: pg-slide 1.2s ease-in-out infinite; }
+@keyframes pg-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(290%); } }
+.topbar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 70; overflow: hidden; background: transparent; }
+.topbar .pg-bar { background: var(--crimson); }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block;
+  animation: spin .7s linear infinite; flex: none; }
+.spin.lg { width: 22px; height: 22px; border-width: 3px; color: var(--navy); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn.is-busy { cursor: progress; opacity: .85; }
+.busy-step { gap: 14px; }
+.busy-row { display: flex; gap: 12px; align-items: center; }
+.busy-row .fine { margin: 0; color: var(--fg); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .indet .pg-bar, .pg-track.indet .pg-bar { width: 100%; opacity: .45; } .spin { border-right-color: currentColor; opacity: .6; } }
+@media (max-width: 760px) { .progress-card { left: 16px; right: 16px; width: auto; } }
+
 /* Phones: rail becomes a top bar with a horizontal folder list */
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); }

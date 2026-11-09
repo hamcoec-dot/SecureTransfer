@@ -13,9 +13,20 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="css/app.css?v=3">
+<link rel="stylesheet" href="css/app.css?v=4">
 <script src="js/vendor/qrcode.js" defer></script>
-<script type="module" src="js/app.js?v=11"></script>
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-functions.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-check.js">
+<link rel="modulepreload" href="js/config.js?v=2">
+<link rel="modulepreload" href="js/crypto.js?v=2">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin>
+<script type="module" src="js/app.js?v=12"></script>
 </head>
 <body>
 <a class="sr" href="#" id="skip">Skip to main content</a>
@@ -93,7 +104,10 @@
       <p class="fine"><button class="linkish" type="button" id="ul-cancel" style="color:var(--navy)">Sign out</button></p>
     </form>
 
-    <div id="f-busy" class="form" hidden><p class="fine" id="busy-text" role="status">Unlocking your files…</p></div>
+    <div id="f-busy" class="form busy-step" hidden>
+      <div class="busy-row"><span class="spin lg" aria-hidden="true"></span><p class="fine" id="busy-text" role="status">Signing in…</p></div>
+      <div class="pg-track indet" aria-hidden="true"><div class="pg-bar"></div></div>
+    </div>
     <p class="fine">Signed out automatically after 30 minutes without activity.</p>
   </div>
 </main>
@@ -164,5 +178,11 @@
 
 <dialog id="dlg" aria-labelledby="dlg-title"><form method="dialog" id="dlg-form" novalidate></form></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="progress" class="progress-card" hidden>
+  <div class="pg-head"><div class="pg-title" id="pg-title" role="status" aria-live="polite"></div><div class="pg-pct" id="pg-pct" aria-hidden="true"></div></div>
+  <div class="pg-track" id="pg-track" role="progressbar" aria-labelledby="pg-title" aria-valuemin="0" aria-valuemax="100"><div class="pg-bar" id="pg-bar"></div></div>
+  <div class="pg-sub" id="pg-sub"></div>
+</div>
+<div id="topbar" class="topbar indet" hidden aria-hidden="true"><div class="pg-bar"></div></div>
 </body>
 </html>

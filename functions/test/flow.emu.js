@@ -27,8 +27,11 @@ function token(uid, { admin = false, mfa = true, email = `${uid}@example.gov` } 
     firebase: { sign_in_provider: 'password', ...(mfa ? { sign_in_second_factor: 'totp' } : {}) },
   })}.`;
 }
-async function call(name, data, who, headers = {}) {
-  const res = await fetch(`http://127.0.0.1:5001/${PROJECT}/us-east1/${name}`, {
+// Every flow goes through the single "api" function, as the portal does; legacy() calls an old separate address.
+async function call(name, data, who, headers = {}) { return post('api', { op: name, data }, who, headers); }
+async function legacy(name, data, who) { return post(name, data, who); }
+async function post(fn, data, who, headers = {}) {
+  const res = await fetch(`http://127.0.0.1:5001/${PROJECT}/us-east1/${fn}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...(who ? { Authorization: `Bearer ${who}` } : {}), ...headers },
     body: JSON.stringify({ data }),
   });
@@ -245,4 +248,14 @@ test('forgot password answers the same for real and unknown addresses', async ()
   assert.deepEqual(await call('requestPasswordEmail', { email: 'nobody@example.gov' }), { ok: true });
   assert.deepEqual(await call('requestPasswordEmail', { email: 'nate@example.gov' }), { ok: true });
   assert.deepEqual(await call('requestPasswordEmail', { email: 'not an email' }), { ok: true });
+});
+
+test('one entry point: ping needs no sign-in, unknown actions refused, old addresses still work', async () => {
+  assert.deepEqual(await post('api', { op: 'ping' }), { ok: true });
+  await rejects(call('nope', {}, ADMIN), 'NOT_FOUND');
+  await rejects(call('hasOwnProperty', {}, ADMIN), 'NOT_FOUND');
+  const viaApi = await call('listFolders', {}, ADMIN);
+  const viaOld = await legacy('listFolders', {}, ADMIN);
+  assert.deepEqual(viaOld.folders.map((f) => f.id), viaApi.folders.map((f) => f.id));
+  await rejects(legacy('listFolders', {}, null), 'UNAUTHENTICATED');
 });
